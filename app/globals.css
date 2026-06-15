@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+@theme {
+  /* — Palette — */
+  --color-canvas:        #FAFAF8;
+  --color-surface:       #F4F1EC;
+  --color-surface-raised:#FFFFFF;
+  --color-border:        #E3DDD5;
+  --color-border-strong: #C8BFB4;
+
+  --color-ink:           #1A1208;
+  --color-ink-2:         #3D2E1E;
+  --color-ink-3:         #7A6A58;
+  --color-ink-4:         #B0A090;
+
+  --color-gold:          #B8933A;
+  --color-gold-light:    #D4B06A;
+  --color-gold-subtle:   #F5EDD8;
+
+  --color-red:           #B03A2E;
+  --color-red-subtle:    #FAEAE8;
+
+  --color-green:         #2E7D52;
+  --color-green-subtle:  #E8F5EE;
+
+  /* — Typography — */
+  --font-display: var(--font-cormorant), Georgia, "Times New Roman", serif;
+  --font-sans:    var(--font-inter), system-ui, -apple-system, sans-serif;
+
+  /* — Radius — */
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-lg:   12px;
+  --radius-xl:   16px;
+
+  /* — Shadow — */
+  --shadow-sm:  0 1px 3px rgba(0,0,0,.08);
+  --shadow-md:  0 4px 12px rgba(0,0,0,.10);
+  --shadow-lg:  0 8px 24px rgba(0,0,0,.12);
+}
+
+:root {
+  --background: #FAFAF8;
+  --foreground: #1A1208;
+}
+
+html {
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans, system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Selection */
+::selection {
+  background: #D4B06A40;
+  color: #1A1208;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #C8BFB4;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover { background: #B0A090; }
