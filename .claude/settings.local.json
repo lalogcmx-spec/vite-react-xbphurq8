@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/pedido/\\\\[id\\\\])",
+      "Bash(npm run *)",
+      "Bash(node -e \"require\\('./node_modules/next/dist/server/font-utils'\\)\")",
+      "Bash(echo \"next/font available: $?\")",
+      "Bash(npm install *)",
+      "Bash(sed -i '' 's|import Header from \"@/components/layout/Header\";|import Navbar from \"@/components/layout/Navbar\";|g' /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/menu/page.tsx /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/checkout/page.tsx /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/pedido/[id]/page.tsx)",
+      "Bash(sed -i '' 's|<Header |<Navbar |g; s|</Header>|</Navbar>|g' /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/menu/page.tsx /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/checkout/page.tsx /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet/app/pedido/[id]/page.tsx)",
+      "Bash(git --version)",
+      "Bash(git init *)",
+      "Bash(git branch *)",
+      "Bash(git -C /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet remote add origin https://github.com/lalogcmx-spec/vite-react-xbphurq8.git)",
+      "Bash(git -C /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet add .)",
+      "Bash(git -C /Users/eduardogarcia/Documents/Proyectos/rossy-gourmet status --short)"
+    ]
+  }
+}
