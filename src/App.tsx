@@ -55,6 +55,7 @@ const MENU = {
 
 const STEPS = ["Menú", "Carrito", "Pedido", "Seguimiento"];
 const CASHBACK_RATE = 0.01;
+const DELIVERY_FEE = 35;
 
 function QtyControl({ qty, onInc, onDec }: { qty: number; onInc: () => void; onDec: () => void }) {
   return (
@@ -105,10 +106,14 @@ function OrderTracker({ order, onBack }: { order: any; onBack: () => void }) {
             <span>${it.price * it.qty}</span>
           </div>
         ))}
+        {order.type === "delivery" &&
+          <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, color:"#888" }}>
+            <span>🛵 Envío</span><span>${order.deliveryFee}</span>
+          </div>}
         <div style={{ borderTop:"1px solid #e0e0e0", marginTop:8, paddingTop:8 }}>
           <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Total</span><span>${order.total}</span></div>
           <div style={{ display:"flex", justifyContent:"space-between", color:"#22c55e", fontWeight:600, marginTop:4 }}>
-            <span>💰 Cashback ganado (1%)</span><span>+${(order.total * CASHBACK_RATE).toFixed(2)}</span>
+            <span>💰 Cashback ganado (1%)</span><span>+${(order.subtotal * CASHBACK_RATE).toFixed(2)}</span>
           </div>
         </div>
       </div>
@@ -139,6 +144,8 @@ export default function App() {
   const total = cartItems.reduce((s: number, i: any) => s + i.price * i.qty, 0);
   const totalQty = cartItems.reduce((s: number, i: any) => s + i.qty, 0);
   const cashback = (total * CASHBACK_RATE).toFixed(2);
+  const deliveryFee = orderType === "delivery" ? DELIVERY_FEE : 0;
+  const grandTotal = total + deliveryFee;
 
   const setQty = (item: any, qty: number) => {
     if (qty <= 0) {
@@ -151,7 +158,7 @@ export default function App() {
   };
 
   const placeOrder = () => {
-    setOrder({ id: Math.floor(100000 + Math.random() * 900000), items: cartItems, total, type: orderType, address });
+    setOrder({ id: Math.floor(100000 + Math.random() * 900000), items: cartItems, subtotal: total, deliveryFee, total: grandTotal, type: orderType, address });
     setStep(3);
   };
 
@@ -314,8 +321,12 @@ export default function App() {
                 <span>{it.img} {it.name} {it.qty > 1 ? `×${it.qty}` : ""}</span><span>${it.price * it.qty}</span>
               </div>
             ))}
+            {orderType === "delivery" &&
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, color:"#888" }}>
+                <span>🛵 Envío</span><span>${deliveryFee}</span>
+              </div>}
             <div style={{ borderTop:"1px solid #e0e0e0", marginTop:8, paddingTop:8 }}>
-              <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Total</span><span>${total}</span></div>
+              <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Total</span><span>${grandTotal}</span></div>
               <div style={{ display:"flex", justifyContent:"space-between", color:"#22c55e", fontWeight:600, marginTop:4 }}>
                 <span>💰 Cashback que ganarás</span><span>+${cashback}</span>
               </div>
