@@ -1,63 +1,76 @@
-import { Container, Sprite, Stage, useTick } from '@inlet/react-pixi';
-import { useEffect, useReducer, useRef, useState } from 'react';
-import useWinResize from './hooks/useWinResize';
+import { useState } from 'react';
+import './App.css';
+import FacturasScreen from './components/FacturasScreen';
+import SubirTicketScreen from './components/SubirTicketScreen';
+import CuentaScreen from './components/CuentaScreen';
+import Paywall from './components/Paywall';
+import { Ticket } from './types';
 
-type ReducerAction = 'update';
-
-interface ReducerInit {
-  type: ReducerAction;
-  data: {
-    x: number;
-    y: number;
-    rotation: number;
-    anchor: number;
-  };
-}
-
-const reducer: (_: any, payload: ReducerInit) => ReducerInit['data'] = (
-  _,
-  { data }
-) => data;
-
-const Mowtwo = () => {
-  const [motion, update] = useReducer(reducer, {
-    x: 0,
-    y: 0,
-    rotation: 0,
-    anchor: 0,
-  });
-  const iter = useRef(0);
-  useTick((delta) => {
-    const { sin, PI, floor, random } = Math;
-    const i = (iter.current += (random() / 4) * delta);
-    update({
-      type: 'update',
-      data: {
-        x: sin(i) * 100,
-        y: sin(i / 1.5) * 100,
-        rotation: sin(i) * PI,
-        anchor: sin(i / 2),
-      },
-    });
-  });
-  return <Sprite image="https://mowtwo.com/favicon.png" {...motion} />;
-};
+type Tab = 'facturas' | 'subir' | 'cuenta';
 
 const App = () => {
-  const [wW, wH] = useWinResize();
+  const [tab, setTab] = useState<Tab>('facturas');
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [showPaywall, setShowPaywall] = useState(false);
+
+  const handleUploaded = () => {
+    setTickets((prev) => [
+      {
+        id: crypto.randomUUID(),
+        comercio: null,
+        total: null,
+        fecha: new Date().toLocaleDateString('es-MX'),
+        status: 'recibido',
+        xml_url: null,
+        pdf_url: null,
+        error_message: null,
+        created_at: new Date().toISOString(),
+      },
+      ...prev,
+    ]);
+    setTab('facturas');
+  };
 
   return (
-    <Stage width={wW} height={wH}>
-      <Container x={300} y={300}>
-        <Mowtwo />
-        <Mowtwo />
-        <Mowtwo />
-        <Mowtwo />
-        <Mowtwo />
-        <Mowtwo />
-        <Mowtwo />
-      </Container>
-    </Stage>
+    <div className="app-shell">
+      {tab === 'facturas' && (
+        <FacturasScreen tickets={tickets} onUploadClick={() => setTab('subir')} />
+      )}
+      {tab === 'subir' && <SubirTicketScreen onUploaded={handleUploaded} />}
+      {tab === 'cuenta' && <CuentaScreen onShowPaywall={() => setShowPaywall(true)} />}
+
+      <nav className="bottom-nav">
+        <button
+          className={`nav-item ${tab === 'facturas' ? 'active' : ''}`}
+          onClick={() => setTab('facturas')}
+        >
+          <span className="nav-icon">📄</span>
+          Facturas
+        </button>
+        <button
+          className={`nav-item center ${tab === 'subir' ? 'active' : ''}`}
+          onClick={() => setTab('subir')}
+        >
+          <span className="nav-icon">+</span>
+          Subir ticket
+        </button>
+        <button
+          className={`nav-item ${tab === 'cuenta' ? 'active' : ''}`}
+          onClick={() => setTab('cuenta')}
+        >
+          <span className="nav-icon">👤</span>
+          Cuenta
+        </button>
+      </nav>
+
+      {showPaywall && (
+        <Paywall
+          onClose={() => setShowPaywall(false)}
+          onSubscribe={() => setShowPaywall(false)}
+        />
+      )}
+    </div>
   );
 };
+
 export default App;
