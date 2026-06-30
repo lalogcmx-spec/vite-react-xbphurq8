@@ -55,7 +55,12 @@ const MENU = {
 
 const STEPS = ["Menú", "Carrito", "Pedido", "Seguimiento"];
 const CASHBACK_RATE = 0.01;
-const DELIVERY_FEE = 35;
+const DELIVERY_ZONES = [
+  { id: 1, label: "Zona 1", desc: "Hasta 2 km", fee: 25 },
+  { id: 2, label: "Zona 2", desc: "2 - 4 km", fee: 40 },
+  { id: 3, label: "Zona 3", desc: "4 - 7 km", fee: 60 },
+  { id: 4, label: "Zona 4", desc: "Más de 7 km", fee: 80 },
+];
 
 function QtyControl({ qty, onInc, onDec }: { qty: number; onInc: () => void; onDec: () => void }) {
   return (
@@ -108,7 +113,7 @@ function OrderTracker({ order, onBack }: { order: any; onBack: () => void }) {
         ))}
         {order.type === "delivery" &&
           <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, color:"#888" }}>
-            <span>🛵 Envío</span><span>${order.deliveryFee}</span>
+            <span>🛵 Envío ({order.deliveryZone})</span><span>${order.deliveryFee}</span>
           </div>}
         <div style={{ borderTop:"1px solid #e0e0e0", marginTop:8, paddingTop:8 }}>
           <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Total</span><span>${order.total}</span></div>
@@ -137,6 +142,7 @@ export default function App() {
   const [activeCategory, setActiveCategory] = useState("Guarniciones");
   const [orderType, setOrderType] = useState("pickup");
   const [address, setAddress] = useState("");
+  const [deliveryZone, setDeliveryZone] = useState(DELIVERY_ZONES[0].id);
   const [order, setOrder] = useState<any>(null);
   const cashbackBalance = 12.50;
 
@@ -144,7 +150,8 @@ export default function App() {
   const total = cartItems.reduce((s: number, i: any) => s + i.price * i.qty, 0);
   const totalQty = cartItems.reduce((s: number, i: any) => s + i.qty, 0);
   const cashback = (total * CASHBACK_RATE).toFixed(2);
-  const deliveryFee = orderType === "delivery" ? DELIVERY_FEE : 0;
+  const selectedZone = DELIVERY_ZONES.find(z => z.id === deliveryZone)!;
+  const deliveryFee = orderType === "delivery" ? selectedZone.fee : 0;
   const grandTotal = total + deliveryFee;
 
   const setQty = (item: any, qty: number) => {
@@ -158,7 +165,7 @@ export default function App() {
   };
 
   const placeOrder = () => {
-    setOrder({ id: Math.floor(100000 + Math.random() * 900000), items: cartItems, subtotal: total, deliveryFee, total: grandTotal, type: orderType, address });
+    setOrder({ id: Math.floor(100000 + Math.random() * 900000), items: cartItems, subtotal: total, deliveryFee, deliveryZone: orderType === "delivery" ? selectedZone.label : null, total: grandTotal, type: orderType, address });
     setStep(3);
   };
 
@@ -310,7 +317,22 @@ export default function App() {
               <div style={{ fontSize:13, fontWeight:600, marginBottom:6 }}>Dirección de entrega</div>
               <input value={address} onChange={e => setAddress(e.target.value)}
                 placeholder="Calle, número, colonia..."
-                style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #ddd", fontSize:13, boxSizing:"border-box" }} />
+                style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #ddd", fontSize:13, boxSizing:"border-box", marginBottom:14 }} />
+
+              <div style={{ fontSize:13, fontWeight:600, marginBottom:6 }}>Zona de entrega</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
+                {DELIVERY_ZONES.map(zone => (
+                  <button key={zone.id} onClick={() => setDeliveryZone(zone.id)}
+                    style={{ padding:"10px 12px", borderRadius:12, border:"1.5px solid", cursor:"pointer", textAlign:"left",
+                      borderColor: deliveryZone===zone.id ? "#c0392b" : "#e0e0e0",
+                      background: deliveryZone===zone.id ? "#c0392b" : "#fff",
+                      color: deliveryZone===zone.id ? "#fff" : "#444" }}>
+                    <div style={{ fontWeight:700, fontSize:13 }}>{zone.label} · ${zone.fee}</div>
+                    <div style={{ fontSize:11, opacity:0.75 }}>{zone.desc}</div>
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize:11, color:"#888" }}>🛵 Entrega vía Didi/Uber según zona</div>
             </div>
           )}
 
@@ -323,7 +345,7 @@ export default function App() {
             ))}
             {orderType === "delivery" &&
               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, color:"#888" }}>
-                <span>🛵 Envío</span><span>${deliveryFee}</span>
+                <span>🛵 Envío ({selectedZone.label})</span><span>${deliveryFee}</span>
               </div>}
             <div style={{ borderTop:"1px solid #e0e0e0", marginTop:8, paddingTop:8 }}>
               <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Total</span><span>${grandTotal}</span></div>
