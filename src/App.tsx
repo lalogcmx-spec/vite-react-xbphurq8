@@ -62,19 +62,19 @@ const DELIVERY_ZONES = [
   { id: 4, label: "Zona 4", desc: "Más de 7 km", fee: 80 },
 ];
 const MUNICIPIOS = [
-  { name: "Fuentes del Valle", zone: 1 },
-  { name: "Hacienda de las Palmas", zone: 1 },
-  { name: "Naucalpan Centro", zone: 2 },
-  { name: "Interlomas", zone: 2 },
-  { name: "Huixquilucan", zone: 2 },
-  { name: "Cuajimalpa", zone: 3 },
+  { name: "Fuentes del Valle (Tultitlán)", zone: 1 },
+  { name: "Tultitlán Centro", zone: 1 },
+  { name: "Cuautitlán Izcalli", zone: 2 },
+  { name: "Coacalco de Berriozábal", zone: 2 },
+  { name: "Tultepec", zone: 2 },
   { name: "Tlalnepantla", zone: 3 },
-  { name: "Atizapán de Zaragoza", zone: 3 },
-  { name: "Miguel Hidalgo", zone: 3 },
-  { name: "Cuautitlán Izcalli", zone: 4 },
-  { name: "Tultitlán", zone: 4 },
+  { name: "Ecatepec de Morelos", zone: 3 },
+  { name: "Cuautitlán", zone: 3 },
+  { name: "Melchor Ocampo", zone: 3 },
+  { name: "Naucalpan", zone: 4 },
+  { name: "Atizapán de Zaragoza", zone: 4 },
   { name: "Azcapotzalco", zone: 4 },
-  { name: "Álvaro Obregón", zone: 4 },
+  { name: "Gustavo A. Madero", zone: 4 },
 ];
 
 function QtyControl({ qty, onInc, onDec }: { qty: number; onInc: () => void; onDec: () => void }) {
