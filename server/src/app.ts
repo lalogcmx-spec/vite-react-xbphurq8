@@ -681,6 +681,8 @@ const billingExecutionWorker = new Worker(
 
       if (comercioKey.includes("costco")) {
         scraper = await import("./scrapers/costco.scraper");
+      } else if (comercioKey.includes("oxxo")) {
+        scraper = await import("./scrapers/oxxo.scraper");
       } else {
         throw new Error(
           `Scraper no disponible para el comercio: ${ticket.comercio}. Próximamente.`
