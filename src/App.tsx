@@ -61,6 +61,21 @@ const DELIVERY_ZONES = [
   { id: 3, label: "Zona 3", desc: "4 - 7 km", fee: 60 },
   { id: 4, label: "Zona 4", desc: "Más de 7 km", fee: 80 },
 ];
+const MUNICIPIOS = [
+  { name: "Fuentes del Valle", zone: 1 },
+  { name: "Hacienda de las Palmas", zone: 1 },
+  { name: "Naucalpan Centro", zone: 2 },
+  { name: "Interlomas", zone: 2 },
+  { name: "Huixquilucan", zone: 2 },
+  { name: "Cuajimalpa", zone: 3 },
+  { name: "Tlalnepantla", zone: 3 },
+  { name: "Atizapán de Zaragoza", zone: 3 },
+  { name: "Miguel Hidalgo", zone: 3 },
+  { name: "Cuautitlán Izcalli", zone: 4 },
+  { name: "Tultitlán", zone: 4 },
+  { name: "Azcapotzalco", zone: 4 },
+  { name: "Álvaro Obregón", zone: 4 },
+];
 
 function QtyControl({ qty, onInc, onDec }: { qty: number; onInc: () => void; onDec: () => void }) {
   return (
@@ -142,7 +157,7 @@ export default function App() {
   const [activeCategory, setActiveCategory] = useState("Guarniciones");
   const [orderType, setOrderType] = useState("pickup");
   const [address, setAddress] = useState("");
-  const [deliveryZone, setDeliveryZone] = useState(DELIVERY_ZONES[0].id);
+  const [municipio, setMunicipio] = useState(MUNICIPIOS[0].name);
   const [order, setOrder] = useState<any>(null);
   const cashbackBalance = 12.50;
 
@@ -150,7 +165,8 @@ export default function App() {
   const total = cartItems.reduce((s: number, i: any) => s + i.price * i.qty, 0);
   const totalQty = cartItems.reduce((s: number, i: any) => s + i.qty, 0);
   const cashback = (total * CASHBACK_RATE).toFixed(2);
-  const selectedZone = DELIVERY_ZONES.find(z => z.id === deliveryZone)!;
+  const selectedMunicipio = MUNICIPIOS.find(m => m.name === municipio)!;
+  const selectedZone = DELIVERY_ZONES.find(z => z.id === selectedMunicipio.zone)!;
   const deliveryFee = orderType === "delivery" ? selectedZone.fee : 0;
   const grandTotal = total + deliveryFee;
 
@@ -165,7 +181,7 @@ export default function App() {
   };
 
   const placeOrder = () => {
-    setOrder({ id: Math.floor(100000 + Math.random() * 900000), items: cartItems, subtotal: total, deliveryFee, deliveryZone: orderType === "delivery" ? selectedZone.label : null, total: grandTotal, type: orderType, address });
+    setOrder({ id: Math.floor(100000 + Math.random() * 900000), items: cartItems, subtotal: total, deliveryFee, deliveryZone: orderType === "delivery" ? `${selectedZone.label} · ${municipio}` : null, total: grandTotal, type: orderType, address });
     setStep(3);
   };
 
@@ -319,20 +335,18 @@ export default function App() {
                 placeholder="Calle, número, colonia..."
                 style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #ddd", fontSize:13, boxSizing:"border-box", marginBottom:14 }} />
 
-              <div style={{ fontSize:13, fontWeight:600, marginBottom:6 }}>Zona de entrega</div>
-              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
+              <div style={{ fontSize:13, fontWeight:600, marginBottom:6 }}>Municipio / Colonia</div>
+              <select value={municipio} onChange={e => setMunicipio(e.target.value)}
+                style={{ width:"100%", padding:"10px 12px", borderRadius:10, border:"1.5px solid #ddd", fontSize:13, boxSizing:"border-box", background:"#fff" }}>
                 {DELIVERY_ZONES.map(zone => (
-                  <button key={zone.id} onClick={() => setDeliveryZone(zone.id)}
-                    style={{ padding:"10px 12px", borderRadius:12, border:"1.5px solid", cursor:"pointer", textAlign:"left",
-                      borderColor: deliveryZone===zone.id ? "#c0392b" : "#e0e0e0",
-                      background: deliveryZone===zone.id ? "#c0392b" : "#fff",
-                      color: deliveryZone===zone.id ? "#fff" : "#444" }}>
-                    <div style={{ fontWeight:700, fontSize:13 }}>{zone.label} · ${zone.fee}</div>
-                    <div style={{ fontSize:11, opacity:0.75 }}>{zone.desc}</div>
-                  </button>
+                  <optgroup key={zone.id} label={`${zone.label} · $${zone.fee}`}>
+                    {MUNICIPIOS.filter(m => m.zone === zone.id).map(m => (
+                      <option key={m.name} value={m.name}>{m.name}</option>
+                    ))}
+                  </optgroup>
                 ))}
-              </div>
-              <div style={{ fontSize:11, color:"#888" }}>🛵 Entrega vía Didi/Uber según zona</div>
+              </select>
+              <div style={{ fontSize:11, color:"#888", marginTop:6 }}>🛵 Entrega vía Didi/Uber · {selectedZone.label} (${selectedZone.fee}) se calcula automáticamente al final</div>
             </div>
           )}
 
@@ -345,7 +359,7 @@ export default function App() {
             ))}
             {orderType === "delivery" &&
               <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, color:"#888" }}>
-                <span>🛵 Envío ({selectedZone.label})</span><span>${deliveryFee}</span>
+                <span>🛵 Envío ({selectedZone.label} · {municipio})</span><span>${deliveryFee}</span>
               </div>}
             <div style={{ borderTop:"1px solid #e0e0e0", marginTop:8, paddingTop:8 }}>
               <div style={{ display:"flex", justifyContent:"space-between", fontWeight:700 }}><span>Total</span><span>${grandTotal}</span></div>
