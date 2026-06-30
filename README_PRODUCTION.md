@@ -7,7 +7,7 @@ Estado honesto: este proyecto **nunca ha facturado un ticket real**. Todo el có
 | Servicio | Para qué | Dónde |
 |---|---|---|
 | Supabase | Base de datos (usuarios, tickets, eventos, cache de selectores) | https://supabase.com |
-| OpenAI | OCR del ticket + GPT-4o Vision fallback en los drivers | https://platform.openai.com/api-keys |
+| Gemini | OCR del ticket + Gemini Vision fallback en los drivers | https://aistudio.google.com/apikey |
 | Redis | Cola BullMQ (procesamiento de tickets y facturación) | Upstash / Railway Redis / Redis Cloud |
 | Meta WhatsApp Cloud API | Recibir tickets y enviar facturas por WhatsApp | https://developers.facebook.com |
 | SMTP | Enviar factura por correo (Gmail App Password, SendGrid, Brevo, etc.) | el que prefieras |
@@ -15,7 +15,7 @@ Estado honesto: este proyecto **nunca ha facturado un ticket real**. Todo el có
 ## 2. Pasos exactos
 
 1. **Supabase**: crea proyecto → SQL Editor → pega y ejecuta el SQL completo de `.env.example` (tablas `usuarios`, `tickets`, `automation_events`, `driver_selectors`) → crea buckets `tickets` (público) y `facturas` (privado/signed URLs) en Storage.
-2. **OpenAI**: genera API key con acceso a `gpt-4o-mini`.
+2. **Gemini**: genera API key con acceso a `gemini-1.5-flash`.
 3. **Redis**: levanta una instancia, copia la `REDIS_URL`.
 4. **Meta WhatsApp**: crea app en Meta for Developers, agrega producto WhatsApp, genera System User Access Token permanente, copia `phone_number_id`, define tu propio `META_VERIFY_TOKEN`.
 5. **SMTP**: si usas Gmail, genera un App Password (no tu contraseña normal).
@@ -29,7 +29,7 @@ Estado honesto: este proyecto **nunca ha facturado un ticket real**. Todo el có
 ## 3. Lo que NO está garantizado
 
 - Que los selectores de OXXO/Costco coincidan con el HTML real de esos portales hoy.
-- Que el fallback de GPT Vision logre completar el formulario sin intervención humana en el primer intento.
+- Que el fallback de Gemini Vision logre completar el formulario sin intervención humana en el primer intento.
 - Que la tasa de éxito (`automation_rate`, expuesta en `GET /api/automation-rate`) sea aceptable sin iterar varias veces sobre fallos reales.
 - Que Walmart/Starbucks/Zara funcionen — sus drivers son 100% Vision y dependen de que tú configures la URL real de su portal de autofacturación (`MERCHANT_PORTAL_*`), cosa que nadie ha hecho todavía.
 

@@ -15,7 +15,7 @@ POST /webhook/whatsapp  (server/src/app.ts)
    ▼
 ticketProcessingWorker  (server/src/app.ts, Worker #1)
    │  descarga imagen, la pasa a extractTicketData()
-   │  → openai.beta.chat.completions.parse() con gpt-4o-mini + Zod schema
+   │  → getGeminiModel().generateContent() con gemini-1.5-flash + Zod schema
    │  guarda comercio/folio/total/fecha/hora en la fila de "tickets"
    │  status → esperando_confirmacion
    │  manda mensaje de confirmación al usuario por WhatsApp
@@ -36,7 +36,7 @@ billingExecutionWorker  (server/src/app.ts, Worker #2)
    │           (server/src/drivers/genericVisionDriver.ts)
    │
    │  cada "stage" intenta: 1) selector cacheado (driver_selectors,
-   │  self-healing) → 2) selector CSS hardcodeado → 3) GPT-4o Vision
+   │  self-healing) → 2) selector CSS hardcodeado → 3) Gemini Vision
    │  encuentra el elemento por screenshot y coordenadas (x,y)
    │
    │  descarga XML + PDF de la factura, valida tamaño/contenido
@@ -55,9 +55,9 @@ Si algo falla en cualquier paso: `status → error`, `error_message` guardado en
 
 | Archivo | Responsabilidad |
 |---|---|
-| `app.ts` | Servidor Express, validación de env, clientes (Supabase/OpenAI/Redis/SMTP), colas BullMQ y sus dos workers, webhook de WhatsApp, OCR (`extractTicketData`), endpoints `/health` y `/api/automation-rate` |
+| `app.ts` | Servidor Express, validación de env, clientes (Supabase/Gemini/Redis/SMTP), colas BullMQ y sus dos workers, webhook de WhatsApp, OCR (`extractTicketData`), endpoints `/health` y `/api/automation-rate` |
 | `drivers/registry.ts` | Resuelve qué driver usar según `ticket.comercio` (Merchant Intelligence Engine) |
-| `drivers/visionEngine.ts` | Motor compartido: lanza Chromium con Playwright (`createBrowser`, `createStealthPage`), loop de automatización con fallback a GPT-4o Vision (`runStage`, `askVisionForNextAction`, `executeVisionAction`) |
+| `drivers/visionEngine.ts` | Motor compartido: lanza Chromium con Playwright (`createBrowser`, `createStealthPage`), loop de automatización con fallback a Gemini Vision (`runStage`, `askVisionForNextAction`, `executeVisionAction`) |
 | `drivers/genericVisionDriver.ts` | Driver 100% Vision para comercios sin selectores conocidos (Walmart/Starbucks/Zara), requiere `MERCHANT_PORTAL_*` en env |
 | `drivers/selectorCache.ts` | Self-healing: guarda/lee selectores CSS exitosos en tabla `driver_selectors` |
 | `drivers/observability.ts` | Inserta/lee eventos de la tabla `automation_events`, calcula `automation_rate` por comercio |
@@ -95,5 +95,5 @@ Limitación heredada de cómo se fue armando el repo en este sandbox: `server/sr
 ## Decisiones de diseño explícitas
 
 - **No se adivinan URLs de portales.** `genericVisionDriver.ts` lanza error explícito si `MERCHANT_PORTAL_*` no está definida, en vez de inventar una URL.
-- **Self-healing = selector cache, no reescritura de código.** Cuando se dice "self-healing" en este proyecto, significa: GPT Vision encuentra un elemento → se captura su selector CSS en runtime → se guarda en Supabase → la próxima vez se intenta ese selector primero. Si dejó de funcionar, se vuelve a usar Vision y se sobreescribe. El código fuente de los drivers nunca se modifica automáticamente.
+- **Self-healing = selector cache, no reescritura de código.** Cuando se dice "self-healing" en este proyecto, significa: Gemini Vision encuentra un elemento → se captura su selector CSS en runtime → se guarda en Supabase → la próxima vez se intenta ese selector primero. Si dejó de funcionar, se vuelve a usar Vision y se sobreescribe. El código fuente de los drivers nunca se modifica automáticamente.
 - **BullMQ usa `{ url: REDIS_URL }`**, no una instancia `ioredis` separada — esto fue un fix deliberado de una sesión anterior (ioredis duplicado causaba conexiones huérfanas).

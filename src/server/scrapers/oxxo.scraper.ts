@@ -69,8 +69,8 @@ export async function ejecutarFacturacion(
   if (!ticket.numero_ticket) throw new Error("Número de ticket faltante");
   if (!ticket.fecha) throw new Error("Fecha del ticket faltante");
   if (!ticket.total) throw new Error("Total del ticket faltante");
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY no configurada — requerida para el fallback de GPT Vision");
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY no configurada — requerida para el fallback de Gemini Vision");
   }
 
   const startedAt = Date.now();

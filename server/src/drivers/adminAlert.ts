@@ -6,7 +6,7 @@ interface AlertableTicket {
   total: number | null;
 }
 
-// Si el driver agota selectores + GPT Vision sin intervención humana,
+// Si el driver agota selectores + Gemini Vision sin intervención humana,
 // alguien debe enterarse — de lo contrario el fallo solo vive en logs
 // que nadie revisa a las 2am.
 export async function alertAdminOnFailure(
@@ -38,7 +38,7 @@ export async function alertAdminOnFailure(
             `Folio: ${ticket.numero_ticket}\n` +
             `Total: $${ticket.total}\n\n` +
             `Error: ${errorMsg}\n\n` +
-            `El driver agotó selectores + GPT Vision. Revisa los artefactos de debug en el servidor.`,
+            `El driver agotó selectores + Gemini Vision. Revisa los artefactos de debug en el servidor.`,
         },
       },
       {

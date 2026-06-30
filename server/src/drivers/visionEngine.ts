@@ -1,9 +1,8 @@
 import { chromium, Browser, Page } from "playwright";
 import path from "path";
 import fs from "fs/promises";
-import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod";
+import { getGeminiModel, extractJson } from "../lib/geminiClient";
 
 // ---------------------------------------------------------------------------
 // BROWSER AGENT — fábrica de navegador headless con perfil "stealth",
@@ -96,14 +95,11 @@ export async function saveDebugArtifact(
 }
 
 // ---------------------------------------------------------------------------
-// AI VISUAL FALLBACK — el mismo motor de decisión por GPT Vision que usa
+// AI VISUAL FALLBACK — el mismo motor de decisión por Gemini Vision que usa
 // OXXO, generalizado para cualquier portal/comercio.
 // ---------------------------------------------------------------------------
 const MAX_VISION_STEPS_PER_STAGE = 8;
 const MAX_STAGE_RETRIES = 3;
-const VISION_MODEL = "gpt-4o-mini";
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 const VisionActionSchema = z.object({
   reasoning: z
@@ -139,47 +135,51 @@ export async function askVisionForNextAction(
   const screenshotBuffer = await page.screenshot({ fullPage: false });
   const base64 = screenshotBuffer.toString("base64");
 
-  const completion = await openai.beta.chat.completions.parse({
-    model: VISION_MODEL,
-    messages: [
-      {
-        role: "system",
-        content:
-          `Eres un agente de automatización web que opera un navegador headless sin supervisión humana, ` +
-          `de madrugada, sobre el portal de facturación de ${comercioLabel} México. ` +
-          "Recibes un screenshot del viewport actual (1366x900) y debes decidir la SIGUIENTE acción única " +
-          "para avanzar hacia el objetivo. Sé conservador: si no estás seguro de qué hacer, usa 'wait'. " +
-          "Si detectas un captcha, un bloqueo de seguridad, o un error que un script no puede resolver, " +
-          "usa 'blocked' y explica por qué. Las coordenadas x,y deben ser el centro del elemento, " +
-          "en píxeles relativos al viewport visible (no a la página completa).",
-      },
+  const model = getGeminiModel();
+  const systemPrompt =
+    `Eres un agente de automatización web que opera un navegador headless sin supervisión humana, ` +
+    `de madrugada, sobre el portal de facturación de ${comercioLabel} México. ` +
+    "Recibes un screenshot del viewport actual (1366x900) y debes decidir la SIGUIENTE acción única " +
+    "para avanzar hacia el objetivo. Sé conservador: si no estás seguro de qué hacer, usa 'wait'. " +
+    "Si detectas un captcha, un bloqueo de seguridad, o un error que un script no puede resolver, " +
+    "usa 'blocked' y explica por qué. Las coordenadas x,y deben ser el centro del elemento, " +
+    "en píxeles relativos al viewport visible (no a la página completa).\n\n" +
+    "Responde ÚNICAMENTE con un objeto JSON con esta forma exacta (sin texto adicional, sin markdown):\n" +
+    `{"reasoning": string, "action": "click"|"type"|"select"|"wait"|"scroll"|"done"|"blocked", ` +
+    `"x": number, "y": number, "textToType": string, "selectValue": string, "blockedReason": string}`;
+
+  const userPrompt =
+    `OBJETIVO ACTUAL: ${goalDescription}\n\n` +
+    `HISTORIAL DE ACCIONES PREVIAS (más reciente al final):\n` +
+    (history.length > 0 ? history.join("\n") : "(ninguna aún)") +
+    `\n\nAnaliza el screenshot adjunto y decide la siguiente acción.`;
+
+  const result = await model.generateContent({
+    contents: [
       {
         role: "user",
-        content: [
-          {
-            type: "text",
-            text:
-              `OBJETIVO ACTUAL: ${goalDescription}\n\n` +
-              `HISTORIAL DE ACCIONES PREVIAS (más reciente al final):\n` +
-              (history.length > 0 ? history.join("\n") : "(ninguna aún)") +
-              `\n\nAnaliza el screenshot adjunto y decide la siguiente acción.`,
-          },
-          {
-            type: "image_url",
-            image_url: { url: `data:image/png;base64,${base64}`, detail: "high" },
-          },
+        parts: [
+          { text: `${systemPrompt}\n\n${userPrompt}` },
+          { inlineData: { mimeType: "image/png", data: base64 } },
         ],
       },
     ],
-    response_format: zodResponseFormat(VisionActionSchema, "vision_action"),
-    max_tokens: 600,
+    generationConfig: { responseMimeType: "application/json", maxOutputTokens: 600 },
   });
 
-  const parsed = completion.choices[0]?.message?.parsed;
-  if (!parsed) {
-    throw new Error("GPT Vision no devolvió una acción estructurada válida");
+  const text = result.response.text();
+  let rawJson: unknown;
+  try {
+    rawJson = extractJson(text);
+  } catch {
+    throw new Error(`Gemini Vision no devolvió JSON válido: ${text.slice(0, 300)}`);
   }
-  return parsed;
+
+  const parsed = VisionActionSchema.safeParse(rawJson);
+  if (!parsed.success) {
+    throw new Error(`Gemini Vision devolvió un objeto que no cumple el schema esperado: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 export async function executeVisionAction(page: Page, action: VisionAction): Promise<void> {
@@ -256,7 +256,7 @@ export async function runStage(
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(ctx.comercio, ctx.ticketId, stageName, `Fast path falló: ${msg}. Cayendo a GPT Vision.`);
+      log(ctx.comercio, ctx.ticketId, stageName, `Fast path falló: ${msg}. Cayendo a Gemini Vision.`);
     }
 
     if (await isComplete()) {
@@ -264,7 +264,7 @@ export async function runStage(
       return { usedVision };
     }
 
-    log(ctx.comercio, ctx.ticketId, stageName, "Activando modo GPT Vision (auto-recuperación)");
+    log(ctx.comercio, ctx.ticketId, stageName, "Activando modo Gemini Vision (auto-recuperación)");
     usedVision = true;
     const history: string[] = [];
 
@@ -286,7 +286,7 @@ export async function runStage(
 
       if (action.action === "done") {
         if (await isComplete()) {
-          log(ctx.comercio, ctx.ticketId, stageName, "Completado vía GPT Vision");
+          log(ctx.comercio, ctx.ticketId, stageName, "Completado vía Gemini Vision");
           return { usedVision };
         }
         history.push(`Paso ${step}: GPT dijo 'done' pero la validación de etapa aún no pasa.`);
@@ -298,7 +298,7 @@ export async function runStage(
       history.push(`Paso ${step}: ${action.action} (${action.reasoning})`);
 
       if (await isComplete()) {
-        log(ctx.comercio, ctx.ticketId, stageName, `Completado vía GPT Vision tras ${step} pasos`);
+        log(ctx.comercio, ctx.ticketId, stageName, `Completado vía Gemini Vision tras ${step} pasos`);
         return { usedVision };
       }
     }

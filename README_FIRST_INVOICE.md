@@ -5,7 +5,7 @@ Cómo generar la **primera factura real** del sistema, de punta a punta, sin pas
 ## Requisitos previos
 
 1. Proyecto Supabase real con las 4 tablas creadas (SQL completo en `.env.example`).
-2. `server/.env` con `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `OPENAI_API_KEY` reales (no placeholders).
+2. `server/.env` con `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `GEMINI_API_KEY` reales (no placeholders).
 3. Una foto de un ticket real de OXXO (o Costco) en tu máquina.
 4. `cd server && npm install` ya ejecutado.
 
@@ -27,17 +27,17 @@ npx tsx scripts/first_real_invoice.ts /ruta/a/ticket_oxxo.jpg --usuarioId=<uuid-
 
 ## Qué hace el script, paso a paso
 
-1. Lee la imagen y la manda a `gpt-4o-mini` con Structured Outputs para extraer comercio, folio, total, fecha, etc. (mismo prompt y schema que usa el servidor real en `server/src/app.ts`).
+1. Lee la imagen y la manda a `gemini-1.5-flash` con Structured Outputs para extraer comercio, folio, total, fecha, etc. (mismo prompt y schema que usa el servidor real en `server/src/app.ts`).
 2. Llama a `resolveDriver(comercio)` (`server/src/drivers/registry.ts`) para encontrar el driver correcto — si el comercio detectado no coincide con ninguno de los registrados (OXXO, Costco, Walmart, Starbucks, Zara), el script se detiene ahí y te dice qué comercios sí soporta.
 3. Crea una fila real en la tabla `tickets` de Supabase con los datos extraídos.
-4. Ejecuta `driver.ejecutarFacturacion(ticket, usuario)` — esto abre Chromium headless, navega al portal del comercio, llena el formulario (selectores CSS o GPT Vision según el caso) y descarga XML + PDF a una carpeta temporal.
+4. Ejecuta `driver.ejecutarFacturacion(ticket, usuario)` — esto abre Chromium headless, navega al portal del comercio, llena el formulario (selectores CSS o Gemini Vision según el caso) y descarga XML + PDF a una carpeta temporal.
 5. Imprime las rutas locales del XML y PDF generados, y actualiza el `status` del ticket en Supabase (`facturado` o `error`).
 
 ## Qué esperar la primera vez
 
 **Esto nunca se ha corrido contra un portal real.** Lo más probable en el primer intento:
 
-- Si el comercio es OXXO/Costco: el selector CSS rápido probablemente falle (porque nunca se verificó contra el HTML real), y el sistema debería caer automáticamente al fallback de GPT Vision. Obsérvalo en los logs de consola (`runStage` imprime cada etapa).
+- Si el comercio es OXXO/Costco: el selector CSS rápido probablemente falle (porque nunca se verificó contra el HTML real), y el sistema debería caer automáticamente al fallback de Gemini Vision. Obsérvalo en los logs de consola (`runStage` imprime cada etapa).
 - Si Vision tampoco logra completar el formulario: el script termina con `❌ Falló la facturación: <mensaje>` y el `error_message` queda guardado en la fila del ticket en Supabase — ahí está la pista de qué ajustar en `server/src/scrapers/oxxo.scraper.ts` (o `costco.scraper.ts`).
 - Si el comercio es Walmart/Starbucks/Zara: el script falla inmediatamente con un mensaje claro si no configuraste `MERCHANT_PORTAL_<NOMBRE>` en `.env` — esto es intencional, no un bug.
 

@@ -1,7 +1,7 @@
 import { Page } from "playwright";
 import { supabase } from "../lib/supabaseClient";
 
-// Self-healing real (no mágico): cuando GPT Vision encuentra y usa un
+// Self-healing real (no mágico): cuando Gemini Vision encuentra y usa un
 // elemento exitosamente, guardamos el selector CSS resultante en
 // Supabase. La próxima corrida intenta ese selector cacheado ANTES de
 // recurrir a Vision de nuevo — así el driver "aprende" sin que nadie

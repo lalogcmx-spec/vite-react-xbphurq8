@@ -5,12 +5,11 @@ import axios from "axios";
 import { createClient } from "@supabase/supabase-js";
 import { Queue, Worker, Job } from "bullmq";
 
-import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import nodemailer from "nodemailer";
 import { resolveDriver, listRegisteredMerchants } from "./drivers/registry";
 import { getAutomationRate } from "./drivers/observability";
+import { getGeminiModel, extractJson } from "./lib/geminiClient";
 
 // ---------------------------------------------------------------------------
 // ENV VALIDATION
@@ -18,7 +17,7 @@ import { getAutomationRate } from "./drivers/observability";
 const required = [
   "SUPABASE_URL",
   "SUPABASE_SERVICE_KEY",
-  "OPENAI_API_KEY",
+  "GEMINI_API_KEY",
   "REDIS_URL",
   "META_VERIFY_TOKEN",
   "META_ACCESS_TOKEN",
@@ -47,8 +46,6 @@ const supabase = createClient(
 );
 
 const redisConnection = { url: process.env.REDIS_URL! };
-
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST!,
@@ -350,46 +347,43 @@ async function extractTicketData(
   base64Image: string,
   mimeType: string = "image/jpeg"
 ): Promise<TicketExtraction> {
-  const completion = await openai.beta.chat.completions.parse({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content:
-          "Eres un asistente especializado en leer tickets de compra mexicanos. " +
-          "Extrae con precisión los datos solicitados. " +
-          "Si un campo no está visible, usa cadena vacía o 0 según corresponda. " +
-          "Las fechas siempre en formato YYYY-MM-DD y horas en HH:MM:SS.",
-      },
+  const model = getGeminiModel();
+  const prompt =
+    "Eres un asistente especializado en leer tickets de compra mexicanos. " +
+    "Extrae con precisión los datos solicitados. " +
+    "Si un campo no está visible, usa cadena vacía o 0 según corresponda. " +
+    "Las fechas siempre en formato YYYY-MM-DD y horas en HH:MM:SS.\n\n" +
+    "Extrae todos los datos de este ticket de compra mexicano y responde " +
+    "ÚNICAMENTE con un objeto JSON con esta forma exacta (sin texto adicional, sin markdown):\n" +
+    `{"comercio": string, "rfcEmisor": string, "fecha": string, "hora": string, ` +
+    `"numeroTicket": string, "subtotal": number, "iva": number, "total": number, "formaPago": string}`;
+
+  const result = await model.generateContent({
+    contents: [
       {
         role: "user",
-        content: [
-          {
-            type: "image_url",
-            image_url: {
-              url: `data:${mimeType};base64,${base64Image}`,
-              detail: "high",
-            },
-          },
-          {
-            type: "text",
-            text: "Extrae todos los datos de este ticket de compra mexicano.",
-          },
+        parts: [
+          { text: prompt },
+          { inlineData: { mimeType, data: base64Image } },
         ],
       },
     ],
-    response_format: zodResponseFormat(
-      TicketExtractionSchema,
-      "ticket_extraction"
-    ),
-    max_tokens: 1000,
+    generationConfig: { responseMimeType: "application/json", maxOutputTokens: 1000 },
   });
 
-  const parsed = completion.choices[0]?.message?.parsed;
-  if (!parsed) {
-    throw new Error("OpenAI no devolvió datos estructurados del ticket");
+  const text = result.response.text();
+  let rawJson: unknown;
+  try {
+    rawJson = extractJson(text);
+  } catch {
+    throw new Error(`Gemini no devolvió JSON válido al leer el ticket: ${text.slice(0, 300)}`);
   }
-  return parsed;
+
+  const parsed = TicketExtractionSchema.safeParse(rawJson);
+  if (!parsed.success) {
+    throw new Error(`Gemini devolvió datos del ticket que no cumplen el schema esperado: ${parsed.error.message}`);
+  }
+  return parsed.data;
 }
 
 // ---------------------------------------------------------------------------

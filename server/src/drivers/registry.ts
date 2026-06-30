@@ -20,7 +20,7 @@ interface RegistryEntry {
 //
 // `verified: false` no es decorativo — son los comercios cuyo portal NUNCA
 // se ha visto en vivo desde este entorno (sin acceso a internet general).
-// Walmart/Starbucks/Zara/Soriana corren 100% sobre GPT Vision porque no
+// Walmart/Starbucks/Zara/Soriana corren 100% sobre Gemini Vision porque no
 // existen selectores conocidos, y requieren configurar la URL real del
 // portal vía variable de entorno antes de poder facturar un solo ticket.
 // ---------------------------------------------------------------------------

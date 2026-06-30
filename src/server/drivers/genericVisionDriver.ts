@@ -63,7 +63,7 @@ export interface GenericMerchantConfig {
 // DRIVER GENÉRICO POR VISIÓN — para comercios sin selectores CSS conocidos
 // (Walmart, Starbucks, Zara, Soriana, etc. en el MVP). Cada campo del
 // formulario es su propia "etapa" de una sola acción, lo que permite
-// cachear el selector exacto que GPT Vision usó la primera vez y, en
+// cachear el selector exacto que Gemini Vision usó la primera vez y, en
 // corridas futuras, rellenarlo directo sin volver a llamar a Vision —
 // esto es el self-healing real: aprende un selector por campo y lo
 // re-valida cada vez que falla, en vez de asumir que nunca cambia.
@@ -160,8 +160,8 @@ export function createGenericVisionDriver(config: GenericMerchantConfig) {
       }
       if (!ticket.numero_ticket) throw new Error("Número de ticket faltante");
       if (!ticket.total) throw new Error("Total del ticket faltante");
-      if (!process.env.OPENAI_API_KEY) {
-        throw new Error("OPENAI_API_KEY no configurada — requerida por este driver (100% basado en GPT Vision)");
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error("GEMINI_API_KEY no configurada — requerida por este driver (100% basado en Gemini Vision)");
       }
 
       const startedAt = Date.now();

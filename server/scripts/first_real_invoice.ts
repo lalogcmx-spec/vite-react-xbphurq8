@@ -9,7 +9,7 @@
  * foto.jpg → OCR → detect merchant → ejecuta driver → descarga XML/PDF
  *
  * Requiere server/.env con credenciales REALES (no placeholders):
- *   SUPABASE_URL, SUPABASE_SERVICE_KEY, OPENAI_API_KEY
+ *   SUPABASE_URL, SUPABASE_SERVICE_KEY, GEMINI_API_KEY
  *   y, si vas a probar OXXO/Costco, nada adicional;
  *   si vas a probar Walmart/Starbucks/Zara, además MERCHANT_PORTAL_<NOMBRE>.
  *
@@ -28,11 +28,10 @@ import "dotenv/config";
 import fs from "fs/promises";
 import path from "path";
 import { randomUUID } from "crypto";
-import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
 import { resolveDriver, listRegisteredMerchants } from "../src/drivers/registry";
+import { getGeminiModel, extractJson } from "../src/lib/geminiClient";
 
 // ---------------------------------------------------------------------------
 // Mismo schema de extracción que usa server/src/app.ts (duplicado a
@@ -70,7 +69,7 @@ async function main() {
     process.exit(1);
   }
 
-  for (const key of ["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "OPENAI_API_KEY"] as const) {
+  for (const key of ["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "GEMINI_API_KEY"] as const) {
     if (!process.env[key] || process.env[key]!.includes("TU_")) {
       console.error(`[BOOT] ${key} falta o sigue siendo un placeholder en server/.env`);
       process.exit(1);
@@ -78,7 +77,6 @@ async function main() {
   }
 
   const supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_KEY!);
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
 
   // -------------------------------------------------------------------
   // PASO 1: OCR — leer el ticket
@@ -89,32 +87,37 @@ async function main() {
   const ext = path.extname(imagePath).toLowerCase();
   const mimeType = ext === ".png" ? "image/png" : "image/jpeg";
 
-  console.log("[2/5] Extrayendo datos del ticket con gpt-4o-mini (OCR estructurado)...");
-  const completion = await openai.beta.chat.completions.parse({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content:
-          "Eres un asistente especializado en leer tickets de compra mexicanos. " +
-          "Extrae con precisión los datos solicitados. " +
-          "Si un campo no está visible, usa cadena vacía o 0 según corresponda. " +
-          "Las fechas siempre en formato YYYY-MM-DD y horas en HH:MM:SS.",
-      },
-      {
-        role: "user",
-        content: [
-          { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}`, detail: "high" } },
-          { type: "text", text: "Extrae todos los datos de este ticket de compra mexicano." },
-        ],
-      },
+  console.log("[2/5] Extrayendo datos del ticket con Gemini (OCR estructurado)...");
+  const model = getGeminiModel();
+  const prompt =
+    "Eres un asistente especializado en leer tickets de compra mexicanos. " +
+    "Extrae con precisión los datos solicitados. " +
+    "Si un campo no está visible, usa cadena vacía o 0 según corresponda. " +
+    "Las fechas siempre en formato YYYY-MM-DD y horas en HH:MM:SS.\n\n" +
+    "Extrae todos los datos de este ticket de compra mexicano y responde " +
+    "ÚNICAMENTE con un objeto JSON con esta forma exacta (sin texto adicional, sin markdown):\n" +
+    `{"comercio": string, "rfcEmisor": string, "fecha": string, "hora": string, ` +
+    `"numeroTicket": string, "subtotal": number, "iva": number, "total": number, "formaPago": string}`;
+
+  const result = await model.generateContent({
+    contents: [
+      { role: "user", parts: [{ text: prompt }, { inlineData: { mimeType, data: base64Image } }] },
     ],
-    response_format: zodResponseFormat(TicketExtractionSchema, "ticket_extraction"),
-    max_tokens: 1000,
+    generationConfig: { responseMimeType: "application/json", maxOutputTokens: 1000 },
   });
 
-  const extraction = completion.choices[0]?.message?.parsed;
-  if (!extraction) throw new Error("OpenAI no devolvió datos estructurados del ticket");
+  const text = result.response.text();
+  let rawJson: unknown;
+  try {
+    rawJson = extractJson(text);
+  } catch {
+    throw new Error(`Gemini no devolvió JSON válido al leer el ticket: ${text.slice(0, 300)}`);
+  }
+  const parsedExtraction = TicketExtractionSchema.safeParse(rawJson);
+  if (!parsedExtraction.success) {
+    throw new Error(`Gemini devolvió datos que no cumplen el schema esperado: ${parsedExtraction.error.message}`);
+  }
+  const extraction = parsedExtraction.data;
   console.log("    Comercio detectado:", extraction.comercio);
   console.log("    Total:", extraction.total);
   console.log("    Folio:", extraction.numeroTicket);
