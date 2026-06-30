@@ -9,6 +9,8 @@ import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { z } from "zod";
 import nodemailer from "nodemailer";
+import { resolveDriver, listRegisteredMerchants } from "./drivers/registry";
+import { getAutomationRate } from "./drivers/observability";
 
 // ---------------------------------------------------------------------------
 // ENV VALIDATION
@@ -670,25 +672,15 @@ const billingExecutionWorker = new Worker(
     let pdfPath: string;
 
     try {
-      const comercioKey = (ticket.comercio ?? "").toLowerCase().replace(/\s+/g, "");
-
-      let scraper: {
-        ejecutarFacturacion: (
-          ticket: Ticket,
-          usuario: Usuario
-        ) => Promise<{ xmlPath: string; pdfPath: string }>;
-      };
-
-      if (comercioKey.includes("costco")) {
-        scraper = await import("./scrapers/costco.scraper");
-      } else if (comercioKey.includes("oxxo")) {
-        scraper = await import("./scrapers/oxxo.scraper");
-      } else {
+      const driverEntry = resolveDriver(ticket.comercio ?? "");
+      if (!driverEntry) {
         throw new Error(
-          `Scraper no disponible para el comercio: ${ticket.comercio}. Próximamente.`
+          `Comercio no reconocido por el Merchant Intelligence Engine: ${ticket.comercio}. ` +
+            `Comercios registrados: ${listRegisteredMerchants().map((m) => m.comercio).join(", ")}.`
         );
       }
 
+      const scraper = await driverEntry.load();
       ({ xmlPath, pdfPath } = await scraper.ejecutarFacturacion(ticket, usuario));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -792,6 +784,19 @@ app.use(
 // ---------------------------------------------------------------------------
 app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+// ---------------------------------------------------------------------------
+// AUTOMATION KPI — % de tickets facturados sin intervención humana, por comercio
+// ---------------------------------------------------------------------------
+app.get("/api/automation-rate", async (_req: Request, res: Response) => {
+  try {
+    const rates = await getAutomationRate();
+    res.json({ merchants: listRegisteredMerchants(), rates });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
 });
 
 // ---------------------------------------------------------------------------

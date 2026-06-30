@@ -1,11 +1,16 @@
-import { chromium, Browser, Page } from "playwright";
 import path from "path";
 import fs from "fs/promises";
 import os from "os";
-import axios from "axios";
-import OpenAI from "openai";
-import { zodResponseFormat } from "openai/helpers/zod";
-import { z } from "zod";
+import {
+  createBrowser,
+  createStealthPage,
+  log,
+  saveDebugArtifact,
+  runStage,
+  StageContext,
+} from "../drivers/visionEngine";
+import { alertAdminOnFailure } from "../drivers/adminAlert";
+import { logAutomationEvent } from "../drivers/observability";
 
 // ---------------------------------------------------------------------------
 // TYPES (inline to keep scraper self-contained)
@@ -50,354 +55,9 @@ interface FacturacionResult {
 // ---------------------------------------------------------------------------
 // CONSTANTS
 // ---------------------------------------------------------------------------
+const COMERCIO = "OXXO";
 const OXXO_FACTURACION_URL = "https://factura.oxxo.com/";
-const TIMEOUT_MS = 45_000;
-const NAVIGATION_TIMEOUT_MS = 90_000;
 const FAST_PATH_SELECTOR_TIMEOUT_MS = 4_000;
-const MAX_VISION_STEPS_PER_STAGE = 8;
-const MAX_STAGE_RETRIES = 3;
-const VISION_MODEL = "gpt-4o-mini";
-
-// ---------------------------------------------------------------------------
-// OPENAI CLIENT (vision fallback)
-// ---------------------------------------------------------------------------
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
-
-// ---------------------------------------------------------------------------
-// ZOD SCHEMA — vision-guided action decision
-// ---------------------------------------------------------------------------
-const VisionActionSchema = z.object({
-  reasoning: z
-    .string()
-    .describe("Breve análisis de qué se ve en pantalla y por qué se elige esta acción"),
-  action: z
-    .enum(["click", "type", "select", "wait", "scroll", "done", "blocked"])
-    .describe(
-      "click: clic en coordenadas. type: escribir texto (requiere click previo o coordenadas). " +
-        "select: elegir opción de un <select> visible. wait: esperar más tiempo a que cargue. " +
-        "scroll: bajar la página. done: la etapa actual ya se completó. " +
-        "blocked: hay un captcha, error fatal, o bloqueo que un humano debe resolver."
-    ),
-  x: z.number().describe("Coordenada X del centro del elemento objetivo (0 si no aplica)"),
-  y: z.number().describe("Coordenada Y del centro del elemento objetivo (0 si no aplica)"),
-  textToType: z.string().describe("Texto a escribir si action es 'type', vacío si no aplica"),
-  selectValue: z
-    .string()
-    .describe("Valor a seleccionar si action es 'select', vacío si no aplica"),
-  blockedReason: z
-    .string()
-    .describe("Si action es 'blocked', explica qué impide continuar; vacío si no aplica"),
-});
-
-type VisionAction = z.infer<typeof VisionActionSchema>;
-
-// ---------------------------------------------------------------------------
-// BROWSER FACTORY
-// ---------------------------------------------------------------------------
-async function createBrowser(): Promise<Browser> {
-  return chromium.launch({
-    headless: true,
-    executablePath: process.env.CHROMIUM_PATH || undefined,
-    args: [
-      "--no-sandbox",
-      "--disable-setuid-sandbox",
-      "--disable-dev-shm-usage",
-      "--disable-accelerated-2d-canvas",
-      "--disable-gpu",
-      "--window-size=1366,900",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-extensions",
-      "--disable-infobars",
-      "--no-first-run",
-      "--no-zygote",
-      "--single-process",
-      "--disable-background-networking",
-      "--disable-background-timer-throttling",
-      "--disable-backgrounding-occluded-windows",
-      "--disable-breakpad",
-      "--disable-client-side-phishing-detection",
-      "--disable-default-apps",
-      "--disable-hang-monitor",
-      "--disable-popup-blocking",
-      "--disable-prompt-on-repost",
-      "--disable-renderer-backgrounding",
-      "--disable-sync",
-      "--metrics-recording-only",
-      "--mute-audio",
-      "--no-default-browser-check",
-      "--safebrowsing-disable-auto-update",
-    ],
-  });
-}
-
-async function createStealthPage(browser: Browser): Promise<Page> {
-  const context = await browser.newContext({
-    viewport: { width: 1366, height: 900 },
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-    locale: "es-MX",
-    timezoneId: "America/Mexico_City",
-    extraHTTPHeaders: {
-      "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-    },
-  });
-
-  await context.addInitScript(`
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    window.chrome = { runtime: {} };
-  `);
-
-  const page = await context.newPage();
-  page.setDefaultTimeout(TIMEOUT_MS);
-  page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
-  return page;
-}
-
-// ---------------------------------------------------------------------------
-// LOGGING — runs unattended at 2am, so every step must be traceable
-// ---------------------------------------------------------------------------
-function log(ticketId: string, stage: string, msg: string): void {
-  console.log(`[OXXO][${ticketId}][${stage}] ${msg}`);
-}
-
-async function saveDebugArtifact(
-  page: Page,
-  workDir: string,
-  label: string
-): Promise<{ screenshotPath: string; htmlPath: string }> {
-  const debugDir = path.join(workDir, "debug");
-  await fs.mkdir(debugDir, { recursive: true });
-  const screenshotPath = path.join(debugDir, `${Date.now()}-${label}.png`);
-  const htmlPath = path.join(debugDir, `${Date.now()}-${label}.html`);
-  await page.screenshot({ path: screenshotPath, fullPage: true });
-  const html = await page.content();
-  await fs.writeFile(htmlPath, html, "utf-8");
-  return { screenshotPath, htmlPath };
-}
-
-// ---------------------------------------------------------------------------
-// VISION-GUIDED ACTION: ask GPT-4o what to click/type given a screenshot
-// ---------------------------------------------------------------------------
-async function askVisionForNextAction(
-  page: Page,
-  goalDescription: string,
-  history: string[]
-): Promise<VisionAction> {
-  const screenshotBuffer = await page.screenshot({ fullPage: false });
-  const base64 = screenshotBuffer.toString("base64");
-
-  const completion = await openai.beta.chat.completions.parse({
-    model: VISION_MODEL,
-    messages: [
-      {
-        role: "system",
-        content:
-          "Eres un agente de automatización web que opera un navegador headless sin supervisión humana, " +
-          "de madrugada, sobre el portal de facturación de OXXO México. " +
-          "Recibes un screenshot del viewport actual (1366x900) y debes decidir la SIGUIENTE acción única " +
-          "para avanzar hacia el objetivo. Sé conservador: si no estás seguro de qué hacer, usa 'wait'. " +
-          "Si detectas un captcha, un bloqueo de seguridad, o un error que un script no puede resolver, " +
-          "usa 'blocked' y explica por qué. Las coordenadas x,y deben ser el centro del elemento, " +
-          "en píxeles relativos al viewport visible (no a la página completa).",
-      },
-      {
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text:
-              `OBJETIVO ACTUAL: ${goalDescription}\n\n` +
-              `HISTORIAL DE ACCIONES PREVIAS (más reciente al final):\n` +
-              (history.length > 0 ? history.join("\n") : "(ninguna aún)") +
-              `\n\nAnaliza el screenshot adjunto y decide la siguiente acción.`,
-          },
-          {
-            type: "image_url",
-            image_url: { url: `data:image/png;base64,${base64}`, detail: "high" },
-          },
-        ],
-      },
-    ],
-    response_format: zodResponseFormat(VisionActionSchema, "vision_action"),
-    max_tokens: 600,
-  });
-
-  const parsed = completion.choices[0]?.message?.parsed;
-  if (!parsed) {
-    throw new Error("GPT Vision no devolvió una acción estructurada válida");
-  }
-  return parsed;
-}
-
-async function executeVisionAction(page: Page, action: VisionAction): Promise<void> {
-  switch (action.action) {
-    case "click":
-      await page.mouse.click(action.x, action.y);
-      await page.waitForTimeout(800);
-      break;
-    case "type":
-      await page.mouse.click(action.x, action.y);
-      await page.waitForTimeout(200);
-      await page.keyboard.type(action.textToType, { delay: 40 + Math.random() * 60 });
-      await page.waitForTimeout(300);
-      break;
-    case "select": {
-      // Runs inside the browser context — document/HTMLSelectElement exist there, not in Node
-      await page.evaluate(
-        `(() => {
-          const elAtPoint = document.elementFromPoint(${action.x}, ${action.y});
-          const selectEl = elAtPoint && elAtPoint.closest("select");
-          if (selectEl) {
-            selectEl.value = ${JSON.stringify(action.selectValue)};
-            selectEl.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-        })()`
-      );
-      await page.waitForTimeout(500);
-      break;
-    }
-    case "scroll":
-      await page.mouse.wheel(0, 600);
-      await page.waitForTimeout(500);
-      break;
-    case "wait":
-      await page.waitForTimeout(2500);
-      break;
-    case "done":
-    case "blocked":
-      break;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// STAGE RUNNER: tries fast CSS-selector path first, falls back to vision
-// loop, retries the whole stage up to MAX_STAGE_RETRIES times.
-// ---------------------------------------------------------------------------
-interface StageContext {
-  ticketId: string;
-  workDir: string;
-}
-
-async function runStage(
-  page: Page,
-  ctx: StageContext,
-  stageName: string,
-  goalDescription: string,
-  fastPath: () => Promise<boolean>,
-  isComplete: () => Promise<boolean>
-): Promise<void> {
-  for (let attempt = 1; attempt <= MAX_STAGE_RETRIES; attempt++) {
-    log(ctx.ticketId, stageName, `Intento ${attempt}/${MAX_STAGE_RETRIES}`);
-
-    try {
-      const fastPathWorked = await fastPath();
-      if (fastPathWorked && (await isComplete())) {
-        log(ctx.ticketId, stageName, "Completado vía selectores rápidos");
-        return;
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log(ctx.ticketId, stageName, `Fast path falló: ${msg}. Cayendo a GPT Vision.`);
-    }
-
-    if (await isComplete()) {
-      log(ctx.ticketId, stageName, "Ya estaba completado antes de usar visión");
-      return;
-    }
-
-    log(ctx.ticketId, stageName, "Activando modo GPT Vision (auto-recuperación)");
-    const history: string[] = [];
-
-    for (let step = 1; step <= MAX_VISION_STEPS_PER_STAGE; step++) {
-      const action = await askVisionForNextAction(page, goalDescription, history);
-      log(
-        ctx.ticketId,
-        stageName,
-        `Vision step ${step}: ${action.action} @ (${action.x},${action.y}) — ${action.reasoning}`
-      );
-
-      if (action.action === "blocked") {
-        await saveDebugArtifact(page, ctx.workDir, `${stageName}-blocked`);
-        throw new Error(
-          `OXXO bloqueó la automatización en etapa "${stageName}": ${action.blockedReason}`
-        );
-      }
-
-      if (action.action === "done") {
-        if (await isComplete()) {
-          log(ctx.ticketId, stageName, "Completado vía GPT Vision");
-          return;
-        }
-        history.push(`Paso ${step}: GPT dijo 'done' pero la validación de etapa aún no pasa.`);
-        continue;
-      }
-
-      await executeVisionAction(page, action);
-      history.push(`Paso ${step}: ${action.action} (${action.reasoning})`);
-
-      if (await isComplete()) {
-        log(ctx.ticketId, stageName, `Completado vía GPT Vision tras ${step} pasos`);
-        return;
-      }
-    }
-
-    await saveDebugArtifact(page, ctx.workDir, `${stageName}-attempt${attempt}-exhausted`);
-    log(
-      ctx.ticketId,
-      stageName,
-      `Se agotaron los ${MAX_VISION_STEPS_PER_STAGE} pasos de visión sin completar la etapa`
-    );
-  }
-
-  throw new Error(
-    `No se pudo completar la etapa "${stageName}" tras ${MAX_STAGE_RETRIES} intentos (selectores + visión)`
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ALERTA A HUMANO — si todo falla a las 2am, alguien debe enterarse
-// ---------------------------------------------------------------------------
-async function alertAdminOnFailure(ticket: Ticket, errorMsg: string): Promise<void> {
-  const adminNumber = process.env.ADMIN_WHATSAPP_NUMBER;
-  if (!adminNumber || !process.env.META_ACCESS_TOKEN || !process.env.META_PHONE_NUMBER_ID) {
-    console.error(
-      `[OXXO] No se configuró ADMIN_WHATSAPP_NUMBER; no se pudo alertar sobre el fallo del ticket ${ticket.id}`
-    );
-    return;
-  }
-
-  try {
-    await axios.post(
-      `https://graph.facebook.com/v19.0/${process.env.META_PHONE_NUMBER_ID}/messages`,
-      {
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: adminNumber,
-        type: "text",
-        text: {
-          preview_url: false,
-          body:
-            `🚨 *FacturaBot MX — Fallo en OXXO*\n\n` +
-            `Ticket: ${ticket.id}\n` +
-            `Folio: ${ticket.numero_ticket}\n` +
-            `Total: $${ticket.total}\n\n` +
-            `Error: ${errorMsg}\n\n` +
-            `El driver agotó selectores + GPT Vision. Revisa los artefactos de debug en el servidor.`,
-        },
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-  } catch (alertErr: unknown) {
-    const msg = alertErr instanceof Error ? alertErr.message : String(alertErr);
-    console.error(`[OXXO] No se pudo enviar alerta al admin: ${msg}`);
-  }
-}
 
 // ---------------------------------------------------------------------------
 // OXXO FACTURACIÓN FLOW — hybrid selector + vision driver
@@ -413,9 +73,13 @@ export async function ejecutarFacturacion(
     throw new Error("OPENAI_API_KEY no configurada — requerida para el fallback de GPT Vision");
   }
 
+  const startedAt = Date.now();
+  await logAutomationEvent({ ticketId: ticket.id, comercio: COMERCIO, status: "started" });
+
   const workDir = await fs.mkdtemp(path.join(os.tmpdir(), `facturabot-oxxo-${ticket.id}-`));
   const browser = await createBrowser();
-  const ctx: StageContext = { ticketId: ticket.id, workDir };
+  const ctx: StageContext = { comercio: COMERCIO, ticketId: ticket.id, workDir };
+  let usedVisionAnyStage = false;
 
   try {
     const page = await createStealthPage(browser);
@@ -423,7 +87,7 @@ export async function ejecutarFacturacion(
     // -------------------------------------------------------------------
     // STAGE 0: Navigate
     // -------------------------------------------------------------------
-    log(ticket.id, "navigate", `Navegando a ${OXXO_FACTURACION_URL}`);
+    log(COMERCIO, ticket.id, "navigate", `Navegando a ${OXXO_FACTURACION_URL}`);
     await page.goto(OXXO_FACTURACION_URL, { waitUntil: "domcontentloaded" });
     await page.waitForTimeout(1500);
 
@@ -445,7 +109,7 @@ export async function ejecutarFacturacion(
     // -------------------------------------------------------------------
     // STAGE 2: Fill ticket search form (folio + total + fecha)
     // -------------------------------------------------------------------
-    await runStage(
+    const stage2 = await runStage(
       page,
       ctx,
       "buscar-ticket",
@@ -495,11 +159,12 @@ export async function ejecutarFacturacion(
         return await rfcField.first().isVisible({ timeout: 1_000 }).catch(() => false);
       }
     );
+    usedVisionAnyStage ||= stage2.usedVision;
 
     // -------------------------------------------------------------------
     // STAGE 3: Fill fiscal data (RFC, nombre, régimen, uso CFDI, correo)
     // -------------------------------------------------------------------
-    await runStage(
+    const stage3 = await runStage(
       page,
       ctx,
       "datos-fiscales",
@@ -572,13 +237,14 @@ export async function ejecutarFacturacion(
         return hasDownloadLink || pageText.includes("factura generada") || pageText.includes("éxito");
       }
     );
+    usedVisionAnyStage ||= stage3.usedVision;
 
     await saveDebugArtifact(page, workDir, "post-facturacion-success");
 
     // -------------------------------------------------------------------
     // STAGE 4: Download XML and PDF
     // -------------------------------------------------------------------
-    log(ticket.id, "descarga", "Descargando XML y PDF");
+    log(COMERCIO, ticket.id, "descarga", "Descargando XML y PDF");
 
     let xmlPath = path.join(workDir, "factura.xml");
     let pdfPath = path.join(workDir, "factura.pdf");
@@ -644,16 +310,15 @@ export async function ejecutarFacturacion(
       };
       page.on("download", onDownload);
 
-      await runStage(
+      const stageXml = await runStage(
         page,
         ctx,
         "descarga-xml-vision",
         "Encuentra y da clic en el enlace o botón para descargar el archivo XML de la factura.",
         async () => false,
         async () => visionCapturedXml
-      ).catch(() => {
-        // runStage throws after exhausting retries; final failure handled below
-      });
+      ).catch(() => ({ usedVision: true }));
+      usedVisionAnyStage ||= stageXml.usedVision;
 
       page.off("download", onDownload);
       xmlDownloaded = visionCapturedXml && (await fs.stat(xmlPath).then(() => true).catch(() => false));
@@ -670,7 +335,7 @@ export async function ejecutarFacturacion(
     );
 
     if (!pdfDownloaded) {
-      log(ticket.id, "descarga", "Link de PDF no encontrado, generando desde la página actual");
+      log(COMERCIO, ticket.id, "descarga", "Link de PDF no encontrado, generando desde la página actual");
       await page.pdf({
         path: pdfPath,
         format: "A4",
@@ -692,12 +357,27 @@ export async function ejecutarFacturacion(
       throw new Error("El XML descargado no corresponde a un CFDI válido del SAT");
     }
 
-    log(ticket.id, "completado", `XML: ${xmlPath}, PDF: ${pdfPath}`);
+    log(COMERCIO, ticket.id, "completado", `XML: ${xmlPath}, PDF: ${pdfPath}`);
+    await logAutomationEvent({
+      ticketId: ticket.id,
+      comercio: COMERCIO,
+      status: "success",
+      durationMs: Date.now() - startedAt,
+      usedVisionFallback: usedVisionAnyStage,
+    });
     return { xmlPath, pdfPath };
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    log(ticket.id, "error-fatal", msg);
-    await alertAdminOnFailure(ticket, msg);
+    log(COMERCIO, ticket.id, "error-fatal", msg);
+    await alertAdminOnFailure(COMERCIO, ticket, msg);
+    await logAutomationEvent({
+      ticketId: ticket.id,
+      comercio: COMERCIO,
+      status: "error",
+      durationMs: Date.now() - startedAt,
+      errorMessage: msg,
+      usedVisionFallback: usedVisionAnyStage,
+    });
     throw new Error(`OXXO scraper: ${msg}`);
   } finally {
     await browser.close();
