@@ -781,6 +781,66 @@ app.get("/health", (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
+// TEST ENDPOINT — Prueba extracción de ticket sin WhatsApp
+// POST /api/test-ticket  body: { imageBase64: "<base64>" }
+// ---------------------------------------------------------------------------
+app.post("/api/test-ticket", async (req: Request, res: Response) => {
+  try {
+    const { imageBase64 } = req.body as { imageBase64?: string };
+    if (!imageBase64) {
+      res.status(400).json({ error: "Falta imageBase64 en el body" });
+      return;
+    }
+    const model = getGeminiModel();
+    const result = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `Eres un extractor de datos de tickets de compra mexicanos.
+Extrae EXACTAMENTE los siguientes campos del ticket en la imagen y responde SOLO con JSON válido, sin texto adicional:
+{
+  "comercio": "nombre del comercio",
+  "rfcEmisor": "RFC del emisor (12-13 chars)",
+  "fecha": "YYYY-MM-DD",
+  "hora": "HH:MM:SS",
+  "numeroTicket": "número de folio",
+  "subtotal": 0.00,
+  "iva": 0.00,
+  "total": 0.00,
+  "formaPago": "EFECTIVO|TARJETA_CREDITO|TARJETA_DEBITO|TRANSFERENCIA"
+}`,
+            },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: imageBase64.replace(/^data:image\/\w+;base64,/, ""),
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: { responseMimeType: "application/json" },
+    });
+
+    const text = result.response.text();
+    const data = extractJson(text);
+    const parsed = TicketExtractionSchema.safeParse(data);
+
+    res.json({
+      raw: data,
+      valid: parsed.success,
+      data: parsed.success ? parsed.data : null,
+      errors: parsed.success ? null : parsed.error.issues,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // AUTOMATION KPI — % de tickets facturados sin intervención humana, por comercio
 // ---------------------------------------------------------------------------
 app.get("/api/automation-rate", async (_req: Request, res: Response) => {
