@@ -1,1 +1,7 @@
 node_modules
+server/.env
+server/logs
+server/dist
+*.pid
+appendonlydir
+*.rdb
