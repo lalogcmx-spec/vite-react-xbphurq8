@@ -19,9 +19,9 @@ const required = [
   "SUPABASE_SERVICE_KEY",
   "GEMINI_API_KEY",
   "REDIS_URL",
-  "META_VERIFY_TOKEN",
-  "META_ACCESS_TOKEN",
-  "META_PHONE_NUMBER_ID",
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_AUTH_TOKEN",
+  "TWILIO_WHATSAPP_FROM",
   "SMTP_HOST",
   "SMTP_PORT",
   "SMTP_USER",
@@ -208,26 +208,25 @@ const billingExecutionQueue = new Queue("billing-execution", {
 });
 
 // ---------------------------------------------------------------------------
-// META WHATSAPP API HELPERS
+// TWILIO WHATSAPP API HELPERS
 // ---------------------------------------------------------------------------
-const META_API_BASE = "https://graph.facebook.com/v19.0";
+function twilioAuthHeader(): string {
+  const sid = process.env.TWILIO_ACCOUNT_SID!;
+  const token = process.env.TWILIO_AUTH_TOKEN!;
+  return "Basic " + Buffer.from(`${sid}:${token}`).toString("base64");
+}
 
 async function sendWhatsAppText(to: string, body: string): Promise<void> {
+  const sid = process.env.TWILIO_ACCOUNT_SID!;
+  const params = new URLSearchParams({
+    From: process.env.TWILIO_WHATSAPP_FROM!,
+    To: `whatsapp:${to}`,
+    Body: body,
+  });
   await axios.post(
-    `${META_API_BASE}/${process.env.META_PHONE_NUMBER_ID}/messages`,
-    {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "text",
-      text: { preview_url: false, body },
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    }
+    `https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+    params.toString(),
+    { headers: { Authorization: twilioAuthHeader(), "Content-Type": "application/x-www-form-urlencoded" } }
   );
 }
 
@@ -236,40 +235,17 @@ async function sendWhatsAppInteractiveButtons(
   bodyText: string,
   buttons: Array<{ id: string; title: string }>
 ): Promise<void> {
-  await axios.post(
-    `${META_API_BASE}/${process.env.META_PHONE_NUMBER_ID}/messages`,
-    {
-      messaging_product: "whatsapp",
-      recipient_type: "individual",
-      to,
-      type: "interactive",
-      interactive: {
-        type: "button",
-        body: { text: bodyText },
-        action: {
-          buttons: buttons.map((b) => ({
-            type: "reply",
-            reply: { id: b.id, title: b.title },
-          })),
-        },
-      },
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
+  // Twilio sandbox no soporta botones interactivos — enviamos texto con opciones numeradas
+  const optionsText = buttons.map((b, i) => `${i + 1}. ${b.title} (responde: ${b.id})`).join("\n");
+  await sendWhatsAppText(to, `${bodyText}\n\n${optionsText}`);
 }
 
-async function downloadMetaMedia(mediaId: string): Promise<string> {
-  const mediaRes = await axios.get(`${META_API_BASE}/${mediaId}`, {
-    headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
-  });
-  const mediaUrl: string = mediaRes.data.url;
+async function downloadTwilioMedia(mediaUrl: string): Promise<string> {
   const imgRes = await axios.get(mediaUrl, {
-    headers: { Authorization: `Bearer ${process.env.META_ACCESS_TOKEN}` },
+    auth: {
+      username: process.env.TWILIO_ACCOUNT_SID!,
+      password: process.env.TWILIO_AUTH_TOKEN!,
+    },
     responseType: "arraybuffer",
   });
   return Buffer.from(imgRes.data as ArrayBuffer).toString("base64");
@@ -854,209 +830,131 @@ app.get("/api/automation-rate", async (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// META WEBHOOK — VERIFICATION (GET)
+// TWILIO WEBHOOK — MESSAGE HANDLER (POST)
+// Twilio sends form-encoded POST to this URL
 // ---------------------------------------------------------------------------
-app.get("/webhook/whatsapp", (req: Request, res: Response) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === process.env.META_VERIFY_TOKEN) {
-    console.log("[Webhook] Meta verification successful");
-    res.status(200).send(challenge);
-    return;
-  }
-
-  res.status(403).json({ error: "Forbidden" });
-});
-
-// ---------------------------------------------------------------------------
-// META WEBHOOK — MESSAGE HANDLER (POST)
-// ---------------------------------------------------------------------------
-app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
-  // Acknowledge Meta immediately (< 3 seconds requirement)
-  res.status(200).json({ status: "ok" });
+app.post("/webhook/whatsapp", express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
+  // Acknowledge Twilio immediately with empty TwiML
+  res.set("Content-Type", "text/xml");
+  res.send("<Response></Response>");
 
   try {
-    const body = req.body;
+    const body = req.body as Record<string, string>;
+    const from = (body.From ?? "").replace("whatsapp:", "");
+    const msgBody = (body.Body ?? "").trim();
+    const numMedia = parseInt(body.NumMedia ?? "0", 10);
 
-    if (body.object !== "whatsapp_business_account") return;
+    if (!from) return;
 
-    for (const entry of body.entry ?? []) {
-      for (const change of entry.changes ?? []) {
-        if (change.field !== "messages") continue;
-
-        const value = change.value;
-        const messages: Array<{
-          from: string;
-          type: string;
-          text?: { body: string };
-          image?: { id: string; mime_type: string };
-          interactive?: {
-            type: string;
-            button_reply?: { id: string; title: string };
-          };
-        }> = value.messages ?? [];
-
-        for (const message of messages) {
-          const from: string = message.from;
-
-          // ----------------------------------------------------------------
-          // INTERACTIVE BUTTON REPLY
-          // ----------------------------------------------------------------
-          if (message.type === "interactive" && message.interactive?.button_reply) {
-            const buttonId = message.interactive.button_reply.id;
-
-            if (buttonId.startsWith("confirm_")) {
-              const ticketId = buttonId.replace("confirm_", "");
-              await updateTicket(ticketId, { status: "en_cola_facturacion" });
-              await billingExecutionQueue.add("execute-billing", {
-                ticketId,
-                whatsappNumber: from,
-              });
-              await sendWhatsAppText(
-                from,
-                "⏳ *Facturando...* Esto puede tomar 1-3 minutos.\n\nTe notificaré cuando tu XML y PDF estén listos. ✨"
-              );
-              continue;
-            }
-
-            if (buttonId.startsWith("correct_")) {
-              const ticketId = buttonId.replace("correct_", "");
-              await updateTicket(ticketId, { status: "error", error_message: "Usuario solicitó corrección" });
-              await sendWhatsAppText(
-                from,
-                "✏️ Entendido. Por favor, envíame una foto más clara del ticket o escríbeme manualmente:\n\n" +
-                  "*Comercio, Fecha (YYYY-MM-DD), Total, Número de ticket*"
-              );
-              continue;
-            }
-            continue;
-          }
-
-          // ----------------------------------------------------------------
-          // IMAGE MESSAGE — TICKET PHOTO
-          // ----------------------------------------------------------------
-          if (message.type === "image" && message.image) {
-            const usuario = await getUserByWhatsapp(from);
-
-            if (!usuario) {
-              await sendWhatsAppText(
-                from,
-                "👋 ¡Hola! Primero necesito registrarte.\n\nEscribe *hola* para comenzar el registro."
-              );
-              continue;
-            }
-
-            const mediaId = message.image.id;
-            const mimeType = message.image.mime_type ?? "image/jpeg";
-
-            await sendWhatsAppText(
-              from,
-              "📸 *Foto recibida.* Analizando tu ticket con IA... 🤖\n\nEsto toma unos segundos."
-            );
-
-            // Upload original image to Supabase Storage
-            let imagenUrl = "";
-            try {
-              const base64 = await downloadMetaMedia(mediaId);
-              const imgBuffer = Buffer.from(base64, "base64");
-              const storageKey = `tickets/${Date.now()}_${from}.jpg`;
-              const { error: uploadErr } = await supabase.storage
-                .from("tickets")
-                .upload(storageKey, imgBuffer, { contentType: mimeType, upsert: false });
-              if (!uploadErr) {
-                const { data: urlData } = supabase.storage
-                  .from("tickets")
-                  .getPublicUrl(storageKey);
-                imagenUrl = urlData.publicUrl;
-              }
-
-              const ticket = await createTicket(usuario.id, imagenUrl);
-
-              await ticketProcessingQueue.add("process-ticket", {
-                ticketId: ticket.id,
-                base64Image: base64,
-                whatsappNumber: from,
-              });
-            } catch (err: unknown) {
-              const msg = err instanceof Error ? err.message : String(err);
-              console.error("[Webhook] Image processing error:", msg);
-              await sendWhatsAppText(
-                from,
-                "❌ Error al procesar tu imagen. Por favor intenta de nuevo."
-              );
-            }
-            continue;
-          }
-
-          // ----------------------------------------------------------------
-          // TEXT MESSAGE
-          // ----------------------------------------------------------------
-          if (message.type === "text" && message.text) {
-            const text = message.text.body.trim().toLowerCase();
-            const usuario = await getUserByWhatsapp(from);
-
-            if (!usuario || registrationSessions.has(from)) {
-              await handleRegistrationFlow(from, message.text.body);
-              continue;
-            }
-
-            if (["hola", "hi", "hello", "inicio", "start", "menu"].includes(text)) {
-              await sendWhatsAppText(
-                from,
-                `👋 ¡Hola *${usuario.nombre}*!\n\n` +
-                  `🤖 *FacturaBot MX* — Tu asistente de facturación automática\n\n` +
-                  `📸 Envíame una *foto de tu ticket* de compra y lo facturo automáticamente.\n\n` +
-                  `Comercios disponibles:\n` +
-                  `• Costco México ✅\n` +
-                  `• Sam's Club (próximamente)\n` +
-                  `• Liverpool (próximamente)\n` +
-                  `• Walmart (próximamente)\n\n` +
-                  `📋 *Tus datos fiscales:*\n` +
-                  `RFC: ${usuario.rfc}\n` +
-                  `Régimen: ${usuario.regimen_fiscal}\n` +
-                  `Uso CFDI: ${usuario.uso_cfdi}`
-              );
-              continue;
-            }
-
-            if (text === "estado" || text === "status") {
-              const { data: tickets } = await supabase
-                .from("tickets")
-                .select("comercio, total, status, created_at")
-                .eq("usuario_id", usuario.id)
-                .order("created_at", { ascending: false })
-                .limit(5);
-
-              if (!tickets || tickets.length === 0) {
-                await sendWhatsAppText(from, "📋 No tienes tickets procesados aún.\n\nEnvía una foto de tu ticket para comenzar.");
-              } else {
-                const statusEmoji: Record<TicketStatus, string> = {
-                  recibido: "📥",
-                  esperando_confirmacion: "⏳",
-                  en_cola_facturacion: "🔄",
-                  facturado: "✅",
-                  error: "❌",
-                };
-                const list = (tickets as Array<{ comercio: string; total: number; status: TicketStatus; created_at: string }>)
-                  .map((t) => `${statusEmoji[t.status]} ${t.comercio} — $${t.total?.toFixed(2)} — ${t.status}`)
-                  .join("\n");
-                await sendWhatsAppText(from, `📊 *Tus últimos tickets:*\n\n${list}`);
-              }
-              continue;
-            }
-
-            await sendWhatsAppText(
-              from,
-              `Hola ${usuario.nombre} 👋\n\n` +
-                `Envíame una *foto de tu ticket* de compra para facturarlo automáticamente.\n\n` +
-                `O escribe *menu* para ver opciones.`
-            );
-          }
-        }
-      }
+    // ----------------------------------------------------------------
+    // TEXT CONFIRMATION REPLIES (simulate button replies via text)
+    // ----------------------------------------------------------------
+    if (msgBody.toLowerCase().startsWith("confirm_")) {
+      const ticketId = msgBody.replace(/^confirm_/i, "");
+      await updateTicket(ticketId, { status: "en_cola_facturacion" });
+      await billingExecutionQueue.add("execute-billing", { ticketId, whatsappNumber: from });
+      await sendWhatsAppText(from, "⏳ *Facturando...* Esto puede tomar 1-3 minutos.\n\nTe notificaré cuando tu XML y PDF estén listos. ✨");
+      return;
     }
+
+    if (msgBody.toLowerCase().startsWith("correct_")) {
+      const ticketId = msgBody.replace(/^correct_/i, "");
+      await updateTicket(ticketId, { status: "error", error_message: "Usuario solicitó corrección" });
+      await sendWhatsAppText(from, "✏️ Entendido. Envíame una foto más clara del ticket.");
+      return;
+    }
+
+    // ----------------------------------------------------------------
+    // IMAGE MESSAGE — TICKET PHOTO
+    // ----------------------------------------------------------------
+    if (numMedia > 0) {
+      const mediaUrl = body.MediaUrl0;
+      const mimeType = body.MediaContentType0 ?? "image/jpeg";
+
+      const usuario = await getUserByWhatsapp(from);
+      if (!usuario) {
+        await sendWhatsAppText(from, "👋 ¡Hola! Primero necesito registrarte.\n\nEscribe *hola* para comenzar el registro.");
+        return;
+      }
+
+      await sendWhatsAppText(from, "📸 *Foto recibida.* Analizando tu ticket con IA... 🤖\n\nEsto toma unos segundos.");
+
+      let imagenUrl = "";
+      try {
+        const base64 = await downloadTwilioMedia(mediaUrl);
+        const imgBuffer = Buffer.from(base64, "base64");
+        const storageKey = `tickets/${Date.now()}_${from}.jpg`;
+        const { error: uploadErr } = await supabase.storage
+          .from("tickets")
+          .upload(storageKey, imgBuffer, { contentType: mimeType, upsert: false });
+        if (!uploadErr) {
+          const { data: urlData } = supabase.storage.from("tickets").getPublicUrl(storageKey);
+          imagenUrl = urlData.publicUrl;
+        }
+        const ticket = await createTicket(usuario.id, imagenUrl);
+        await ticketProcessingQueue.add("process-ticket", {
+          ticketId: ticket.id,
+          base64Image: base64,
+          whatsappNumber: from,
+        });
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[Webhook] Image processing error:", msg);
+        await sendWhatsAppText(from, "❌ Error al procesar tu imagen. Por favor intenta de nuevo.");
+      }
+      return;
+    }
+
+    // ----------------------------------------------------------------
+    // TEXT MESSAGE
+    // ----------------------------------------------------------------
+    const text = msgBody.toLowerCase();
+    const usuario = await getUserByWhatsapp(from);
+
+    if (!usuario || registrationSessions.has(from)) {
+      await handleRegistrationFlow(from, msgBody);
+      return;
+    }
+
+    if (["hola", "hi", "hello", "inicio", "start", "menu"].includes(text)) {
+      await sendWhatsAppText(
+        from,
+        `👋 ¡Hola *${usuario.nombre}*!\n\n` +
+          `🤖 *FacturaBot MX* — Tu asistente de facturación automática\n\n` +
+          `📸 Envíame una *foto de tu ticket* de compra y lo facturo automáticamente.\n\n` +
+          `Comercios disponibles:\n• Costco México ✅\n• OXXO ✅\n• Walmart (próximamente)\n\n` +
+          `📋 *Tus datos fiscales:*\nRFC: ${usuario.rfc}\nRégimen: ${usuario.regimen_fiscal}\nUso CFDI: ${usuario.uso_cfdi}`
+      );
+      return;
+    }
+
+    if (text === "estado" || text === "status") {
+      const { data: tickets } = await supabase
+        .from("tickets")
+        .select("comercio, total, status, created_at")
+        .eq("usuario_id", usuario.id)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (!tickets || tickets.length === 0) {
+        await sendWhatsAppText(from, "📋 No tienes tickets procesados aún.\n\nEnvía una foto de tu ticket para comenzar.");
+      } else {
+        const statusEmoji: Record<TicketStatus, string> = {
+          recibido: "📥", esperando_confirmacion: "⏳",
+          en_cola_facturacion: "🔄", facturado: "✅", error: "❌",
+        };
+        const list = (tickets as Array<{ comercio: string; total: number; status: TicketStatus; created_at: string }>)
+          .map((t) => `${statusEmoji[t.status]} ${t.comercio} — $${t.total?.toFixed(2)} — ${t.status}`)
+          .join("\n");
+        await sendWhatsAppText(from, `📊 *Tus últimos tickets:*\n\n${list}`);
+      }
+      return;
+    }
+
+    await sendWhatsAppText(
+      from,
+      `Hola ${usuario.nombre} 👋\n\nEnvíame una *foto de tu ticket* de compra para facturarlo.\n\nO escribe *menu* para ver opciones.`
+    );
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Webhook] Unhandled error:", msg);
