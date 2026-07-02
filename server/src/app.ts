@@ -984,10 +984,10 @@ process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
 
 // ---------------------------------------------------------------------------
-// START SERVER
+// START SERVER — HTTP first so healthcheck passes immediately
 // ---------------------------------------------------------------------------
 const PORT = Number(process.env.PORT ?? process.env.APP_PORT ?? 3000);
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`[Server] FacturaBot MX running on port ${PORT}`);
   console.log(`[Workers] ticket-processing and billing-execution workers active`);
 });
