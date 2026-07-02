@@ -745,6 +745,7 @@ app.use(
     },
   })
 );
+app.use(express.urlencoded({ extended: false }));
 
 // ---------------------------------------------------------------------------
 // HEALTH CHECK
@@ -830,7 +831,7 @@ app.get("/api/automation-rate", async (_req: Request, res: Response) => {
 // TWILIO WEBHOOK — MESSAGE HANDLER (POST)
 // Twilio sends form-encoded POST to this URL
 // ---------------------------------------------------------------------------
-app.post("/webhook/whatsapp", express.urlencoded({ extended: false }), async (req: Request, res: Response) => {
+app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
   // Acknowledge Twilio immediately with empty TwiML
   res.set("Content-Type", "text/xml");
   res.send("<Response></Response>");
