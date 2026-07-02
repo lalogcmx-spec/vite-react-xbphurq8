@@ -27,7 +27,6 @@ const required = [
   "SMTP_USER",
   "SMTP_PASS",
   "SMTP_FROM",
-  "APP_PORT",
 ] as const;
 
 for (const key of required) {
@@ -989,7 +988,7 @@ process.on("SIGINT", shutdown);
 // ---------------------------------------------------------------------------
 // START SERVER
 // ---------------------------------------------------------------------------
-const PORT = Number(process.env.APP_PORT ?? 3000);
+const PORT = Number(process.env.PORT ?? process.env.APP_PORT ?? 3000);
 app.listen(PORT, () => {
   console.log(`[Server] FacturaBot MX running on port ${PORT}`);
   console.log(`[Workers] ticket-processing and billing-execution workers active`);
