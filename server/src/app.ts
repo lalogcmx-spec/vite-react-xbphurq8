@@ -22,12 +22,9 @@ const required = [
   "TWILIO_ACCOUNT_SID",
   "TWILIO_AUTH_TOKEN",
   "TWILIO_WHATSAPP_FROM",
-  "SMTP_HOST",
-  "SMTP_PORT",
-  "SMTP_USER",
-  "SMTP_PASS",
-  "SMTP_FROM",
 ] as const;
+
+const optional = ["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"] as const;
 
 for (const key of required) {
   if (!process.env[key]) {
@@ -46,12 +43,12 @@ const supabase = createClient(
 
 const redisConnection = { url: process.env.REDIS_URL! };
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST!,
-  port: Number(process.env.SMTP_PORT!),
-  secure: Number(process.env.SMTP_PORT!) === 465,
+const transporter = process.env.SMTP_HOST ? nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT ?? 587),
+  secure: Number(process.env.SMTP_PORT ?? 587) === 465,
   auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
-});
+}) : null;
 
 // ---------------------------------------------------------------------------
 // TYPESCRIPT TYPES
@@ -369,6 +366,7 @@ async function sendFacturaEmail(
   nombre: string,
   ticket: Ticket
 ): Promise<void> {
+  if (!transporter) { console.warn("[Email] SMTP not configured, skipping email"); return; }
   await transporter.sendMail({
     from: `"FacturaBot MX" <${process.env.SMTP_FROM}>`,
     to: correo,
