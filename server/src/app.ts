@@ -929,7 +929,8 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
       const mediaUrl = body.MediaUrl0;
       const mimeType = body.MediaContentType0 ?? "image/jpeg";
 
-      const usuario = await getUserByWhatsapp(from);
+      let usuario: Usuario | null = null;
+      try { usuario = await getUserByWhatsapp(from); } catch { /* handled below */ }
       if (!usuario) {
         twimlReply(res, "👋 ¡Hola! Primero necesito registrarte.\n\nEscribe hola para comenzar el registro.");
         return;
@@ -986,7 +987,8 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
     // TEXT MESSAGE
     // ----------------------------------------------------------------
     const text = msgBody.toLowerCase();
-    const usuario = await getUserByWhatsapp(from);
+    let usuario: Usuario | null = null;
+    try { usuario = await getUserByWhatsapp(from); } catch { /* fall through to registration */ }
 
     if (!usuario || registrationSessions.has(from)) {
       // Handle registration inline — get reply text then send via TwiML
@@ -1030,6 +1032,9 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Webhook] Error:", msg);
+    if (!res.headersSent) {
+      twimlReply(res, "⚠️ Error interno. Intenta de nuevo en un momento.");
+    }
   }
 });
 
