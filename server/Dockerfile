@@ -1,9 +1,8 @@
-FROM node:22-slim
+FROM node:22-slim AS builder
 
 WORKDIR /app
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-ENV NODE_ENV=production
 
 COPY package.json package-lock.json ./
 RUN npm ci
@@ -12,6 +11,19 @@ COPY tsconfig.json ./
 COPY src ./src
 
 RUN npm run build
+
+# ---- runtime image (no devDeps, no playwright) ----
+FROM node:22-slim
+
+WORKDIR /app
+
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist ./dist
 
 EXPOSE 3000
 
