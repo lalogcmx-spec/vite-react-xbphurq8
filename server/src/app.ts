@@ -838,11 +838,15 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
 
   try {
     const body = req.body as Record<string, string>;
+    console.log("[Webhook] Body recibido:", JSON.stringify(body).slice(0, 300));
+
     const from = (body.From ?? "").replace("whatsapp:", "");
     const msgBody = (body.Body ?? "").trim();
     const numMedia = parseInt(body.NumMedia ?? "0", 10);
 
-    if (!from) return;
+    console.log(`[Webhook] from=${from} body="${msgBody}" numMedia=${numMedia}`);
+
+    if (!from) { console.log("[Webhook] No from, ignoring"); return; }
 
     // ----------------------------------------------------------------
     // TEXT CONFIRMATION REPLIES (simulate button replies via text)
