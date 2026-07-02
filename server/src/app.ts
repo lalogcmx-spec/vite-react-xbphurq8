@@ -392,7 +392,77 @@ async function sendFacturaEmail(
 }
 
 // ---------------------------------------------------------------------------
-// REGISTRATION FLOW
+// REGISTRATION FLOW — returns reply text for TwiML inline response
+// ---------------------------------------------------------------------------
+async function getRegistrationReply(from: string, messageText: string): Promise<string> {
+  let session = registrationSessions.get(from);
+
+  if (!session) {
+    session = { step: "awaiting_rfc" };
+    registrationSessions.set(from, session);
+    return "¡Bienvenido a FacturaBot MX! 🤖\n\nVoy a registrarte para facturación automática.\n\nEscribe tu RFC (12 o 13 caracteres):";
+  }
+
+  if (session.step === "awaiting_rfc") {
+    const rfc = messageText.trim().toUpperCase();
+    if (!/^[A-Z&Ñ]{3,4}\d{6}[A-Z0-9]{3}$/.test(rfc)) {
+      return "❌ RFC inválido (12 chars empresa / 13 persona física).\n\nEscribe tu RFC nuevamente:";
+    }
+    session.rfc = rfc;
+    session.step = "awaiting_nombre";
+    return "✅ RFC registrado.\n\nEscribe tu nombre completo o razón social:";
+  }
+
+  if (session.step === "awaiting_nombre") {
+    const nombre = messageText.trim();
+    if (nombre.length < 3) return "❌ Nombre muy corto. Escribe tu nombre completo:";
+    session.nombre = nombre;
+    session.step = "awaiting_correo";
+    return "✅ Nombre registrado.\n\nEscribe tu correo electrónico para recibir facturas:";
+  }
+
+  if (session.step === "awaiting_correo") {
+    const correo = messageText.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) return "❌ Correo inválido. Escribe un correo válido:";
+    session.correo = correo;
+    session.step = "awaiting_regimen";
+    return "✅ Correo registrado.\n\nEscribe tu Régimen Fiscal SAT:\n• 626 — RESICO\n• 612 — Act. Empresariales\n• 601 — Personas Morales\n\nEj: 626";
+  }
+
+  if (session.step === "awaiting_regimen") {
+    const regimen = messageText.trim() as RegimenFiscal;
+    const valid: RegimenFiscal[] = ["601","603","605","606","608","609","610","611","612","614","616","620","621","622","623","624","625","626"];
+    if (!valid.includes(regimen)) return "❌ Régimen no reconocido. Escribe código válido (ej: 626):";
+    session.regimen_fiscal = regimen;
+    session.step = "awaiting_uso_cfdi";
+    return "✅ Régimen registrado.\n\nEscribe tu Uso de CFDI:\n• G03 — Gastos generales\n• G01 — Adquisición mercancias\n• S01 — Sin efectos fiscales\n\nEj: G03";
+  }
+
+  if (session.step === "awaiting_uso_cfdi") {
+    const usoCfdi = messageText.trim().toUpperCase() as UsoCFDI;
+    const valid: UsoCFDI[] = ["G01","G02","G03","I01","I02","I03","I04","I05","I06","I07","I08","D01","D02","D03","D04","D05","D06","D07","D08","D09","D10","S01","CP01","CN01"];
+    if (!valid.includes(usoCfdi)) return "❌ Uso CFDI no reconocido. Escribe código válido (ej: G03):";
+
+    try {
+      await createUsuario({
+        whatsapp_number: from,
+        nombre: session.nombre!,
+        rfc: session.rfc!,
+        correo: session.correo!,
+        regimen_fiscal: session.regimen_fiscal!,
+        uso_cfdi: usoCfdi,
+      });
+      registrationSessions.delete(from);
+      return `🎉 ¡Registro listo!\n\nRFC: ${session.rfc}\nNombre: ${session.nombre}\nRégimen: ${session.regimen_fiscal}\nUso CFDI: ${usoCfdi}\n\nAhora envíame foto de tu ticket y lo facturo. 🚀`;
+    } catch (err: unknown) {
+      registrationSessions.delete(from);
+      return "❌ Error al guardar registro. Escribe hola para intentar de nuevo.";
+    }
+  }
+
+  return "Escribe hola para comenzar.";
+}
+
 // ---------------------------------------------------------------------------
 async function handleRegistrationFlow(
   from: string,
@@ -831,40 +901,26 @@ app.get("/api/automation-rate", async (_req: Request, res: Response) => {
 // TWILIO WEBHOOK — MESSAGE HANDLER (POST)
 // Twilio sends form-encoded POST to this URL
 // ---------------------------------------------------------------------------
-app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
-  // Acknowledge Twilio immediately with empty TwiML
+// TwiML helper — respond inline without calling Twilio API
+// ---------------------------------------------------------------------------
+function twimlReply(res: Response, message: string): void {
+  const escaped = message.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   res.set("Content-Type", "text/xml");
-  res.send("<Response></Response>");
+  res.send(`<Response><Message>${escaped}</Message></Response>`);
+}
 
+app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
   try {
     const body = req.body as Record<string, string>;
-    console.log("[Webhook] Body recibido:", JSON.stringify(body).slice(0, 300));
+    console.log("[Webhook] Body:", JSON.stringify(body).slice(0, 400));
 
     const from = (body.From ?? "").replace("whatsapp:", "");
     const msgBody = (body.Body ?? "").trim();
     const numMedia = parseInt(body.NumMedia ?? "0", 10);
 
-    console.log(`[Webhook] from=${from} body="${msgBody}" numMedia=${numMedia}`);
+    console.log(`[Webhook] from=${from} msg="${msgBody}" media=${numMedia}`);
 
-    if (!from) { console.log("[Webhook] No from, ignoring"); return; }
-
-    // ----------------------------------------------------------------
-    // TEXT CONFIRMATION REPLIES (simulate button replies via text)
-    // ----------------------------------------------------------------
-    if (msgBody.toLowerCase().startsWith("confirm_")) {
-      const ticketId = msgBody.replace(/^confirm_/i, "");
-      await updateTicket(ticketId, { status: "en_cola_facturacion" });
-      await billingExecutionQueue.add("execute-billing", { ticketId, whatsappNumber: from });
-      await sendWhatsAppText(from, "⏳ *Facturando...* Esto puede tomar 1-3 minutos.\n\nTe notificaré cuando tu XML y PDF estén listos. ✨");
-      return;
-    }
-
-    if (msgBody.toLowerCase().startsWith("correct_")) {
-      const ticketId = msgBody.replace(/^correct_/i, "");
-      await updateTicket(ticketId, { status: "error", error_message: "Usuario solicitó corrección" });
-      await sendWhatsAppText(from, "✏️ Entendido. Envíame una foto más clara del ticket.");
-      return;
-    }
+    if (!from) { res.send("<Response></Response>"); return; }
 
     // ----------------------------------------------------------------
     // IMAGE MESSAGE — TICKET PHOTO
@@ -875,17 +931,18 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
 
       const usuario = await getUserByWhatsapp(from);
       if (!usuario) {
-        await sendWhatsAppText(from, "👋 ¡Hola! Primero necesito registrarte.\n\nEscribe *hola* para comenzar el registro.");
+        twimlReply(res, "👋 ¡Hola! Primero necesito registrarte.\n\nEscribe hola para comenzar el registro.");
         return;
       }
 
-      await sendWhatsAppText(from, "📸 *Foto recibida.* Analizando tu ticket con IA... 🤖\n\nEsto toma unos segundos.");
+      // Respond immediately so Twilio doesn't timeout, then process async
+      twimlReply(res, "📸 Foto recibida. Analizando tu ticket con IA 🤖\n\nEsto toma unos segundos, te respondo pronto.");
 
-      let imagenUrl = "";
       try {
         const base64 = await downloadTwilioMedia(mediaUrl);
         const imgBuffer = Buffer.from(base64, "base64");
         const storageKey = `tickets/${Date.now()}_${from}.jpg`;
+        let imagenUrl = "";
         const { error: uploadErr } = await supabase.storage
           .from("tickets")
           .upload(storageKey, imgBuffer, { contentType: mimeType, upsert: false });
@@ -901,9 +958,27 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
         });
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("[Webhook] Image processing error:", msg);
-        await sendWhatsAppText(from, "❌ Error al procesar tu imagen. Por favor intenta de nuevo.");
+        console.error("[Webhook] Image error:", msg);
+        await sendWhatsAppText(from, "❌ Error al procesar tu imagen. Intenta de nuevo con mejor iluminación.");
       }
+      return;
+    }
+
+    // ----------------------------------------------------------------
+    // TEXT CONFIRMATION REPLIES
+    // ----------------------------------------------------------------
+    if (msgBody.toLowerCase().startsWith("confirm_")) {
+      const ticketId = msgBody.replace(/^confirm_/i, "");
+      await updateTicket(ticketId, { status: "en_cola_facturacion" });
+      await billingExecutionQueue.add("execute-billing", { ticketId, whatsappNumber: from });
+      twimlReply(res, "⏳ Facturando... Esto puede tomar 1-3 minutos.\n\nTe aviso cuando tu XML y PDF estén listos.");
+      return;
+    }
+
+    if (msgBody.toLowerCase().startsWith("correct_")) {
+      const ticketId = msgBody.replace(/^correct_/i, "");
+      await updateTicket(ticketId, { status: "error", error_message: "Usuario solicitó corrección" });
+      twimlReply(res, "✏️ Entendido. Envíame una foto más clara del ticket.");
       return;
     }
 
@@ -914,18 +989,19 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
     const usuario = await getUserByWhatsapp(from);
 
     if (!usuario || registrationSessions.has(from)) {
-      await handleRegistrationFlow(from, msgBody);
+      // Handle registration inline — get reply text then send via TwiML
+      const reply = await getRegistrationReply(from, msgBody);
+      twimlReply(res, reply);
       return;
     }
 
     if (["hola", "hi", "hello", "inicio", "start", "menu"].includes(text)) {
-      await sendWhatsAppText(
-        from,
-        `👋 ¡Hola *${usuario.nombre}*!\n\n` +
-          `🤖 *FacturaBot MX* — Tu asistente de facturación automática\n\n` +
-          `📸 Envíame una *foto de tu ticket* de compra y lo facturo automáticamente.\n\n` +
-          `Comercios disponibles:\n• Costco México ✅\n• OXXO ✅\n• Walmart (próximamente)\n\n` +
-          `📋 *Tus datos fiscales:*\nRFC: ${usuario.rfc}\nRégimen: ${usuario.regimen_fiscal}\nUso CFDI: ${usuario.uso_cfdi}`
+      twimlReply(res,
+        `👋 ¡Hola ${usuario.nombre}!\n\n` +
+        `🤖 FacturaBot MX — Facturación automática\n\n` +
+        `📸 Envíame foto de tu ticket y lo facturo.\n\n` +
+        `Comercios: Costco ✅ | OXXO ✅\n\n` +
+        `RFC: ${usuario.rfc}\nRégimen: ${usuario.regimen_fiscal}`
       );
       return;
     }
@@ -933,33 +1009,27 @@ app.post("/webhook/whatsapp", async (req: Request, res: Response) => {
     if (text === "estado" || text === "status") {
       const { data: tickets } = await supabase
         .from("tickets")
-        .select("comercio, total, status, created_at")
+        .select("comercio, total, status")
         .eq("usuario_id", usuario.id)
         .order("created_at", { ascending: false })
         .limit(5);
 
       if (!tickets || tickets.length === 0) {
-        await sendWhatsAppText(from, "📋 No tienes tickets procesados aún.\n\nEnvía una foto de tu ticket para comenzar.");
+        twimlReply(res, "📋 No tienes tickets aún. Envía foto de un ticket para comenzar.");
       } else {
-        const statusEmoji: Record<TicketStatus, string> = {
-          recibido: "📥", esperando_confirmacion: "⏳",
-          en_cola_facturacion: "🔄", facturado: "✅", error: "❌",
-        };
-        const list = (tickets as Array<{ comercio: string; total: number; status: TicketStatus; created_at: string }>)
-          .map((t) => `${statusEmoji[t.status]} ${t.comercio} — $${t.total?.toFixed(2)} — ${t.status}`)
-          .join("\n");
-        await sendWhatsAppText(from, `📊 *Tus últimos tickets:*\n\n${list}`);
+        const emoji: Record<TicketStatus, string> = { recibido:"📥", esperando_confirmacion:"⏳", en_cola_facturacion:"🔄", facturado:"✅", error:"❌" };
+        const list = (tickets as Array<{ comercio: string; total: number; status: TicketStatus }>)
+          .map((t) => `${emoji[t.status]} ${t.comercio} $${t.total?.toFixed(2)} — ${t.status}`).join("\n");
+        twimlReply(res, `📊 Tus últimos tickets:\n\n${list}`);
       }
       return;
     }
 
-    await sendWhatsAppText(
-      from,
-      `Hola ${usuario.nombre} 👋\n\nEnvíame una *foto de tu ticket* de compra para facturarlo.\n\nO escribe *menu* para ver opciones.`
-    );
+    twimlReply(res, `Hola ${usuario.nombre} 👋\n\nEnvíame foto de tu ticket para facturarlo.\nO escribe menu para opciones.`);
+
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error("[Webhook] Unhandled error:", msg);
+    console.error("[Webhook] Error:", msg);
   }
 });
 
