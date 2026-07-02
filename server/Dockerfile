@@ -4,15 +4,15 @@ WORKDIR /app
 
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-COPY package.json package-lock.json ./
-RUN npm ci
+COPY package.json ./
+RUN npm install
 
 COPY tsconfig.json ./
 COPY src ./src
 
 RUN npm run build
 
-# ---- runtime image (no devDeps, no playwright) ----
+# ---- runtime image (production deps only) ----
 FROM node:22-slim
 
 WORKDIR /app
@@ -20,8 +20,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+COPY package.json ./
+RUN npm install --omit=dev
 
 COPY --from=builder /app/dist ./dist
 
